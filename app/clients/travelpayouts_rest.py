@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 
 import httpx
@@ -25,6 +25,8 @@ class TravelpayoutsRestClient:
     def __init__(self, http_client: httpx.AsyncClient, settings: Settings) -> None:
         self._http_client = http_client
         self._settings = settings
+        self._airline_names: dict[str, str] = {}
+        self._airline_cache_expires_at: datetime | None = None
 
     async def autocomplete_places(self, term: str) -> list[dict]:
         response = await self._http_client.get(
@@ -42,6 +44,16 @@ class TravelpayoutsRestClient:
         offers = self._normalize_offers(payload=payload, endpoint=endpoint)
         request_hash = self.make_cache_key(endpoint, params)
         return offers, endpoint, request_hash, payload
+
+    async def get_airline_name(self, airline_code: str | None) -> str | None:
+        if not airline_code:
+            return None
+
+        code = airline_code.strip().upper()
+        now = datetime.now(timezone.utc)
+        if self._airline_cache_expires_at is None or now >= self._airline_cache_expires_at:
+            await self._refresh_airline_directory(now)
+        return self._airline_names.get(code)
 
     def make_cache_key(self, endpoint: str, params: dict) -> str:
         normalized = "&".join(f"{key}={params[key]}" for key in sorted(params))
@@ -136,6 +148,31 @@ class TravelpayoutsRestClient:
                 await asyncio.sleep(self._settings.http_retry_backoff_seconds * attempt)
 
         raise TravelpayoutsError(f"Travelpayouts request failed: {last_error}") from last_error
+
+    async def _refresh_airline_directory(self, now: datetime) -> None:
+        url = f"{self._settings.travelpayouts_base_url.rstrip('/')}/data/{self._settings.travelpayouts_locale}/airlines.json"
+        try:
+            response = await self._http_client.get(url, timeout=self._settings.http_timeout_seconds)
+            response.raise_for_status()
+            payload = response.json()
+            mapping: dict[str, str] = {}
+            if isinstance(payload, list):
+                for item in payload:
+                    if not isinstance(item, dict):
+                        continue
+                    code = str(item.get("code") or item.get("iata") or item.get("iata_code") or "").strip().upper()
+                    name = _extract_airline_name(item, self._settings.travelpayouts_locale)
+                    if code and name:
+                        mapping[code] = name
+
+            if mapping:
+                self._airline_names = mapping
+                self._airline_cache_expires_at = now + timedelta(hours=24)
+                return
+        except (httpx.HTTPError, ValueError, TypeError) as exc:
+            logger.warning("airline_directory_fetch_failed", extra={"error": str(exc)})
+
+        self._airline_cache_expires_at = now + timedelta(hours=1)
 
     def _normalize_offers(self, *, payload: dict, endpoint: str) -> list[OfferDTO]:
         data = payload.get("data")
@@ -236,3 +273,19 @@ def _flatten_offer_items(data: object) -> list[dict]:
             for value in data.values():
                 items.extend(_flatten_offer_items(value))
     return items
+
+
+def _extract_airline_name(item: dict, locale: str) -> str | None:
+    translations = item.get("name_translations")
+    if isinstance(translations, dict):
+        localized = translations.get(locale)
+        if isinstance(localized, str) and localized.strip():
+            return localized.strip()
+        english = translations.get("en")
+        if isinstance(english, str) and english.strip():
+            return english.strip()
+
+    name = item.get("name")
+    if isinstance(name, str) and name.strip():
+        return name.strip()
+    return None

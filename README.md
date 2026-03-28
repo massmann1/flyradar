@@ -77,6 +77,11 @@ Must be set before first run:
 - `/subscriptions`
 - `/cancel`
 
+During `/new`:
+
+- date selection supports inline calendar or manual input like `01.06.2026` and `2026-06-01:2026-06-12`
+- max price supports examples like `45000`, `45 000`, `45`, `45к`, or `-`
+
 ## Admin API
 
 - `GET /health/live`

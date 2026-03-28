@@ -6,7 +6,7 @@ from decimal import Decimal
 from aiogram import Bot
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.domain.enums import NotificationStatus
+from app.domain.enums import NotificationReason, NotificationStatus
 from app.domain.models import NotificationEvent, Offer, Subscription
 from app.repositories.notifications import NotificationRepository
 
@@ -62,31 +62,60 @@ def format_offer_message(
     offer: Offer,
     price_amount: Decimal,
     currency: str,
-    reason_label: str,
+    reason: NotificationReason,
     previous_price: Decimal | None = None,
+    airline_name: str | None = None,
 ) -> str:
     parts = [
         "<b>Найден билет</b>",
         f"Подписка: <b>{subscription.name}</b>",
         f"Маршрут: <b>{offer.origin_iata} -> {offer.destination_iata}</b>",
-        f"Дата вылета: <b>{offer.departure_at.date().isoformat() if offer.departure_at else '-'}</b>",
+        f"Дата вылета: <b>{_format_trip_date(offer.departure_at)}</b>",
     ]
 
     if offer.return_at:
-        parts.append(f"Дата возврата: <b>{offer.return_at.date().isoformat()}</b>")
+        parts.append(f"Дата возврата: <b>{_format_trip_date(offer.return_at)}</b>")
 
     parts.extend(
         [
-            f"Цена: <b>{price_amount} {currency}</b>",
-            f"Причина: <b>{reason_label}</b>",
-            f"Прямой: <b>{'да' if (offer.transfers or 0) == 0 else 'нет'}</b>",
+            f"Цена: <b>{_format_money(price_amount)} {currency}</b>",
+            f"Причина: <b>{_render_notification_reason(reason)}</b>",
+            f"Пересадки: <b>{_render_transfers(offer.transfers)}</b>",
         ]
     )
 
     if offer.airline_iata:
-        parts.append(f"Авиакомпания: <b>{offer.airline_iata}</b>")
+        airline_label = f"{airline_name} ({offer.airline_iata})" if airline_name else offer.airline_iata
+        parts.append(f"Авиакомпания: <b>{airline_label}</b>")
     if previous_price is not None and previous_price > price_amount:
-        parts.append(f"Прошлая отправленная цена: <b>{previous_price} {currency}</b>")
+        parts.append(f"Прошлая отправленная цена: <b>{_format_money(previous_price)} {currency}</b>")
     if offer.deeplink_path:
         parts.append(f"Ссылка: https://www.aviasales.com{offer.deeplink_path}")
     return "\n".join(parts)
+
+
+def _render_notification_reason(reason: NotificationReason) -> str:
+    labels = {
+        NotificationReason.PRICE_BELOW_THRESHOLD: "цена ниже заданного лимита",
+        NotificationReason.PRICE_DROP: "цена снизилась относительно прошлого уведомления",
+        NotificationReason.NEW_VARIANT: "найден новый подходящий вариант",
+    }
+    return labels.get(reason, reason.value)
+
+
+def _render_transfers(transfers: int | None) -> str:
+    if transfers in (None, 0):
+        return "без пересадок"
+    return str(transfers)
+
+
+def _format_trip_date(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    return value.date().strftime("%d.%m.%Y")
+
+
+def _format_money(value: Decimal) -> str:
+    if value == value.to_integral_value():
+        return f"{int(value):,}".replace(",", " ")
+    return f"{value:,.2f}".replace(",", " ").rstrip("0").rstrip(".")

@@ -134,8 +134,9 @@ class AlertService:
                         offer=offer,
                         price_amount=dto.price_amount,
                         currency=dto.currency,
-                        reason_label=reason.value,
+                        reason=reason,
                         previous_price=last_sent.price_amount if last_sent else None,
+                        airline_name=await self._travelpayouts_client.get_airline_name(dto.airline_iata),
                     )
                     event = await self._notifications.create(
                         session,

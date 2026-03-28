@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import logging
-from datetime import date
+import re
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 
 from aiogram import F, Router
@@ -9,7 +10,16 @@ from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Chat, ErrorEvent, Message
 
-from app.bot.keyboards.subscriptions import baggage_keyboard, confirm_keyboard, return_mode_keyboard, subscription_actions_keyboard, trip_type_keyboard, yes_no_keyboard
+from app.bot.keyboards.subscriptions import (
+    baggage_keyboard,
+    calendar_keyboard,
+    confirm_keyboard,
+    date_input_mode_keyboard,
+    return_mode_keyboard,
+    subscription_actions_keyboard,
+    trip_type_keyboard,
+    yes_no_keyboard,
+)
 from app.bot.states import NewSubscriptionStates
 from app.clients.travelpayouts_rest import TravelpayoutsRestClient
 from app.core.config import Settings
@@ -151,8 +161,31 @@ def build_subscription_router(
             return
         trip_type = TripType.ONE_WAY if callback.data.endswith("one_way") else TripType.ROUND_TRIP
         await state.update_data(trip_type=trip_type.value)
-        await state.set_state(NewSubscriptionStates.departure_dates)
-        await callback.message.answer("Даты вылета: YYYY-MM-DD или YYYY-MM-DD:YYYY-MM-DD")
+        await state.set_state(NewSubscriptionStates.departure_mode)
+        await callback.message.answer(
+            "Как задать даты вылета?\n"
+            "Можно выбрать через календарь или ввести вручную.",
+            reply_markup=date_input_mode_keyboard("new:departure_mode"),
+        )
+        await callback.answer()
+
+    @router.callback_query(NewSubscriptionStates.departure_mode, F.data.startswith("new:departure_mode:"))
+    async def departure_mode_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await ensure_access(callback):
+            return
+        mode = callback.data.rsplit(":", 1)[-1]
+        if mode == "manual":
+            await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
+            await state.set_state(NewSubscriptionStates.departure_dates)
+            await callback.message.answer(_manual_date_prompt("вылета"))
+        else:
+            await _start_calendar_selection(
+                message=callback.message,
+                state=state,
+                state_name=NewSubscriptionStates.departure_dates,
+                context="departure",
+                mode=mode,
+            )
         await callback.answer()
 
     @router.message(NewSubscriptionStates.departure_dates)
@@ -162,21 +195,17 @@ def build_subscription_router(
         try:
             date_from, date_to = _parse_date_range(message.text)
         except ValueError:
-            await message.answer("Неверный формат. Используй YYYY-MM-DD или YYYY-MM-DD:YYYY-MM-DD")
+            await message.answer(_manual_date_prompt("вылета"))
             return
 
         await state.update_data(
             departure_date_from=date_from.isoformat(),
             departure_date_to=date_to.isoformat() if date_to else None,
+            calendar_context=None,
+            calendar_mode=None,
+            calendar_stage=None,
         )
-        data = await state.get_data()
-        if data["trip_type"] == TripType.ONE_WAY.value:
-            await state.set_state(NewSubscriptionStates.max_price)
-            await message.answer("Максимальная цена? Отправь число или '-'")
-            return
-
-        await state.set_state(NewSubscriptionStates.return_mode)
-        await message.answer("Как задавать обратный путь?", reply_markup=return_mode_keyboard())
+        await _after_departure_dates_selected(message=message, state=state)
 
     @router.callback_query(NewSubscriptionStates.return_mode, F.data.startswith("new:return:"))
     async def return_mode_handler(callback: CallbackQuery, state: FSMContext) -> None:
@@ -184,12 +213,140 @@ def build_subscription_router(
             return
         if callback.data.endswith("dates"):
             await state.update_data(return_mode="dates")
-            await state.set_state(NewSubscriptionStates.return_dates)
-            await callback.message.answer("Даты возврата: YYYY-MM-DD или YYYY-MM-DD:YYYY-MM-DD")
+            await state.set_state(NewSubscriptionStates.return_date_mode)
+            await callback.message.answer(
+                "Как задать даты возврата?\n"
+                "Можно выбрать через календарь или ввести вручную.",
+                reply_markup=date_input_mode_keyboard("new:return_date_mode"),
+            )
         else:
             await state.update_data(return_mode="duration")
             await state.set_state(NewSubscriptionStates.duration)
             await callback.message.answer("Длительность поездки в днях: 3 или 3-7")
+        await callback.answer()
+
+    @router.callback_query(NewSubscriptionStates.return_date_mode, F.data.startswith("new:return_date_mode:"))
+    async def return_date_mode_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await ensure_access(callback):
+            return
+        mode = callback.data.rsplit(":", 1)[-1]
+        if mode == "manual":
+            await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
+            await state.set_state(NewSubscriptionStates.return_dates)
+            await callback.message.answer(_manual_date_prompt("возврата"))
+        else:
+            await _start_calendar_selection(
+                message=callback.message,
+                state=state,
+                state_name=NewSubscriptionStates.return_dates,
+                context="return",
+                mode=mode,
+            )
+        await callback.answer()
+
+    @router.callback_query(F.data.startswith("new:calendar:"))
+    async def calendar_callback_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await ensure_access(callback):
+            return
+        _, _, context, action, *payload = callback.data.split(":")
+        data = await state.get_data()
+        if action == "noop":
+            await callback.answer()
+            return
+
+        if data.get("calendar_context") != context:
+            await callback.answer("Этот календарь уже устарел. Начни шаг заново.", show_alert=True)
+            return
+
+        mode = data.get("calendar_mode", "fixed")
+        stage = data.get("calendar_stage", "from")
+        from_key, to_key = _calendar_keys(context)
+
+        if action == "cancel":
+            await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
+            if context == "departure":
+                await state.set_state(NewSubscriptionStates.departure_mode)
+                await callback.message.answer(
+                    "Выбор даты отменен.\nКак задать даты вылета?",
+                    reply_markup=date_input_mode_keyboard("new:departure_mode"),
+                )
+            else:
+                await state.set_state(NewSubscriptionStates.return_date_mode)
+                await callback.message.answer(
+                    "Выбор даты отменен.\nКак задать даты возврата?",
+                    reply_markup=date_input_mode_keyboard("new:return_date_mode"),
+                )
+            await callback.answer()
+            return
+
+        if action == "nav":
+            year = int(payload[0])
+            month = int(payload[1])
+            selected_from = date.fromisoformat(data[from_key]) if stage == "to" and data.get(from_key) else None
+            await callback.message.edit_text(
+                _calendar_prompt(context=context, mode=mode, stage=stage),
+                reply_markup=calendar_keyboard(context=context, year=year, month=month, selected_from=selected_from),
+            )
+            await callback.answer()
+            return
+
+        if action != "pick":
+            await callback.answer()
+            return
+
+        selected_date = date.fromisoformat(payload[0])
+        if mode == "fixed":
+            await state.update_data(
+                **{
+                    from_key: selected_date.isoformat(),
+                    to_key: None,
+                    "calendar_context": None,
+                    "calendar_mode": None,
+                    "calendar_stage": None,
+                }
+            )
+            await callback.message.answer(f"Выбрана дата: <b>{_format_date(selected_date)}</b>")
+            if context == "departure":
+                await _after_departure_dates_selected(message=callback.message, state=state)
+            else:
+                await _after_return_dates_selected(message=callback.message, state=state)
+            await callback.answer()
+            return
+
+        if stage == "from":
+            await state.update_data(**{from_key: selected_date.isoformat(), to_key: None, "calendar_stage": "to"})
+            await callback.message.edit_text(
+                _calendar_prompt(context=context, mode=mode, stage="to"),
+                reply_markup=calendar_keyboard(
+                    context=context,
+                    year=selected_date.year,
+                    month=selected_date.month,
+                    selected_from=selected_date,
+                ),
+            )
+            await callback.answer(f"Начало диапазона: {_format_date(selected_date)}")
+            return
+
+        start_date = date.fromisoformat(data[from_key])
+        if selected_date < start_date:
+            await callback.answer("Конец диапазона не может быть раньше начала.", show_alert=True)
+            return
+
+        await state.update_data(
+            **{
+                to_key: selected_date.isoformat(),
+                "calendar_context": None,
+                "calendar_mode": None,
+                "calendar_stage": None,
+            }
+        )
+        await callback.message.answer(
+            f"Выбран диапазон: <b>{_format_date(start_date)} - {_format_date(selected_date)}</b>"
+        )
+        if context == "departure":
+            await _after_departure_dates_selected(message=callback.message, state=state)
+        else:
+            await _after_return_dates_selected(message=callback.message, state=state)
         await callback.answer()
 
     @router.message(NewSubscriptionStates.return_dates)
@@ -199,14 +356,16 @@ def build_subscription_router(
         try:
             date_from, date_to = _parse_date_range(message.text)
         except ValueError:
-            await message.answer("Неверный формат. Используй YYYY-MM-DD или YYYY-MM-DD:YYYY-MM-DD")
+            await message.answer(_manual_date_prompt("возврата"))
             return
         await state.update_data(
             return_date_from=date_from.isoformat(),
             return_date_to=date_to.isoformat() if date_to else None,
+            calendar_context=None,
+            calendar_mode=None,
+            calendar_stage=None,
         )
-        await state.set_state(NewSubscriptionStates.max_price)
-        await message.answer("Максимальная цена? Отправь число или '-'")
+        await _after_return_dates_selected(message=message, state=state)
 
     @router.message(NewSubscriptionStates.duration)
     async def duration_handler(message: Message, state: FSMContext) -> None:
@@ -219,21 +378,18 @@ def build_subscription_router(
             return
         await state.update_data(min_trip_duration_days=min_days, max_trip_duration_days=max_days)
         await state.set_state(NewSubscriptionStates.max_price)
-        await message.answer("Максимальная цена? Отправь число или '-'")
+        await message.answer(_max_price_prompt())
 
     @router.message(NewSubscriptionStates.max_price)
     async def max_price_handler(message: Message, state: FSMContext) -> None:
         if not await ensure_access(message):
             return
-        value = message.text.strip()
-        if value == "-":
-            await state.update_data(max_price=None)
-        else:
-            try:
-                await state.update_data(max_price=str(Decimal(value)))
-            except (InvalidOperation, ValueError):
-                await message.answer("Цена должна быть числом или '-'")
-                return
+        try:
+            parsed_price = _parse_price_input(message.text)
+        except (InvalidOperation, ValueError):
+            await message.answer(_max_price_prompt())
+            return
+        await state.update_data(max_price=str(parsed_price) if parsed_price is not None else None)
         await state.set_state(NewSubscriptionStates.direct_only)
         await message.answer("Только прямые рейсы?", reply_markup=yes_no_keyboard("new:direct"))
 
@@ -410,8 +566,8 @@ def _render_subscription(subscription) -> str:
     return (
         f"<b>{subscription.name}</b>\n"
         f"{subscription.origin_iata} -> {subscription.destination_iata}\n"
-        f"Тип: {subscription.trip_type.value}\n"
-        f"Цена до: {subscription.max_price or '-'} {subscription.currency}\n"
+        f"Тип: {_render_trip_type(subscription.trip_type.value)}\n"
+        f"Цена до: {_format_money(subscription.max_price)} {subscription.currency}\n"
         f"Прямые: {'да' if subscription.direct_only else 'нет'}\n"
         f"Интервал: {subscription.check_interval_minutes} мин\n"
         f"Статус: {status}"
@@ -431,13 +587,17 @@ async def _resolve_airport_or_city_code(raw_text: str, client: TravelpayoutsRest
 
 
 def _parse_date_range(value: str) -> tuple[date, date | None]:
-    text = value.strip()
-    if ":" not in text:
-        parsed = date.fromisoformat(text)
-        return parsed, None
-    start, end = [part.strip() for part in text.split(":", 1)]
-    start_date = date.fromisoformat(start)
-    end_date = date.fromisoformat(end)
+    tokens = re.findall(r"\d{4}-\d{2}-\d{2}|\d{2}[./]\d{2}[./]\d{4}", value.strip())
+    if not tokens:
+        raise ValueError("Date value is missing")
+    if len(tokens) > 2:
+        raise ValueError("Too many dates in input")
+
+    start_date = _parse_single_date(tokens[0])
+    if len(tokens) == 1:
+        return start_date, None
+
+    end_date = _parse_single_date(tokens[1])
     if end_date < start_date:
         raise ValueError("End date must be after start date")
     return start_date, end_date
@@ -461,22 +621,22 @@ def _render_state_summary(data: dict) -> str:
         "<b>Проверь подписку</b>",
         f"Название: {data['name']}",
         f"Маршрут: {data['origin_iata']} -> {data['destination_iata']}",
-        f"Тип: {data['trip_type']}",
-        f"Вылет: {data['departure_date_from']} .. {data.get('departure_date_to') or data['departure_date_from']}",
+        f"Тип: {_render_trip_type(data['trip_type'])}",
+        f"Вылет: {_format_date_range(data['departure_date_from'], data.get('departure_date_to'))}",
     ]
     if data.get("return_date_from"):
-        parts.append(f"Возврат: {data['return_date_from']} .. {data.get('return_date_to') or data['return_date_from']}")
+        parts.append(f"Возврат: {_format_date_range(data['return_date_from'], data.get('return_date_to'))}")
     if data.get("min_trip_duration_days"):
         parts.append(
             f"Длительность: {data['min_trip_duration_days']} .. {data.get('max_trip_duration_days') or data['min_trip_duration_days']} дней"
         )
     parts.extend(
         [
-            f"Макс. цена: {data.get('max_price') or '-'}",
+            f"Макс. цена: {_format_money(data.get('max_price'))}",
             f"Прямые: {'да' if data['direct_only'] else 'нет'}",
             f"Интервал: {data['check_interval_minutes']} минут",
             f"Авиакомпании: {', '.join(data.get('preferred_airlines', [])) or '-'}",
-            f"Багаж: {data['baggage_policy']}",
+            f"Багаж: {_render_baggage_policy(data['baggage_policy'])}",
             f"Валюта: {data['currency']}",
         ]
     )
@@ -485,3 +645,143 @@ def _render_state_summary(data: dict) -> str:
 
 def _is_private_chat(chat: Chat | None) -> bool:
     return bool(chat and chat.type == "private")
+
+
+async def _after_departure_dates_selected(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    if data["trip_type"] == TripType.ONE_WAY.value:
+        await state.set_state(NewSubscriptionStates.max_price)
+        await message.answer(_max_price_prompt())
+        return
+
+    await state.set_state(NewSubscriptionStates.return_mode)
+    await message.answer("Как задавать обратный путь?", reply_markup=return_mode_keyboard())
+
+
+async def _after_return_dates_selected(message: Message, state: FSMContext) -> None:
+    await state.set_state(NewSubscriptionStates.max_price)
+    await message.answer(_max_price_prompt())
+
+
+async def _start_calendar_selection(
+    *,
+    message: Message,
+    state: FSMContext,
+    state_name,
+    context: str,
+    mode: str,
+) -> None:
+    today = date.today()
+    await state.update_data(calendar_context=context, calendar_mode=mode, calendar_stage="from")
+    await state.set_state(state_name)
+    await message.answer(
+        _calendar_prompt(context=context, mode=mode, stage="from"),
+        reply_markup=calendar_keyboard(context=context, year=today.year, month=today.month),
+    )
+
+
+def _calendar_keys(context: str) -> tuple[str, str]:
+    if context == "departure":
+        return "departure_date_from", "departure_date_to"
+    return "return_date_from", "return_date_to"
+
+
+def _manual_date_prompt(label: str) -> str:
+    return (
+        f"Введи дату {label}.\n"
+        "Поддерживаются оба формата:\n"
+        "• 01.06.2026\n"
+        "• 2026-06-01\n"
+        "Для диапазона можно так:\n"
+        "• 01.06.2026 - 12.06.2026\n"
+        "• 2026-06-01:2026-06-12"
+    )
+
+
+def _max_price_prompt() -> str:
+    return (
+        "Максимальная цена?\n"
+        "Можно ввести:\n"
+        "• 45000\n"
+        "• 45 000\n"
+        "• 45 или 45к, если удобно считать тысячами\n"
+        "• - если лимита нет"
+    )
+
+
+def _calendar_prompt(*, context: str, mode: str, stage: str) -> str:
+    label = "вылета" if context == "departure" else "возврата"
+    if mode == "fixed":
+        return f"Выбери дату {label} в календаре."
+    if stage == "from":
+        return f"Выбери первую дату {label}."
+    return f"Теперь выбери последнюю дату {label}."
+
+
+def _parse_single_date(value: str) -> date:
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(value, fmt).date()
+        except ValueError:
+            continue
+    raise ValueError("Date format is invalid")
+
+
+def _parse_price_input(raw_value: str | None) -> Decimal | None:
+    value = (raw_value or "").strip().lower().replace(" ", "")
+    if value == "-":
+        return None
+    if not value:
+        raise ValueError("Price is required")
+
+    multiplier = Decimal("1")
+    if value.endswith(("k", "к")):
+        multiplier = Decimal("1000")
+        value = value[:-1]
+
+    normalized = value.replace(",", ".")
+    amount = Decimal(normalized)
+
+    if normalized.isdigit() and 0 < int(normalized) < 1000:
+        multiplier = Decimal("1000")
+
+    amount *= multiplier
+    if amount <= 0:
+        raise ValueError("Price must be positive")
+
+    if amount == amount.to_integral_value():
+        return amount.quantize(Decimal("1"))
+    return amount.quantize(Decimal("0.01"))
+
+
+def _format_date(value: date | str) -> str:
+    current = date.fromisoformat(value) if isinstance(value, str) else value
+    return current.strftime("%d.%m.%Y")
+
+
+def _format_date_range(date_from: date | str, date_to: date | str | None) -> str:
+    start = _format_date(date_from)
+    end = _format_date(date_to) if date_to else start
+    return f"{start} - {end}"
+
+
+def _format_money(value: Decimal | str | None) -> str:
+    if value is None:
+        return "-"
+    amount = value if isinstance(value, Decimal) else Decimal(str(value))
+    if amount == amount.to_integral_value():
+        return f"{int(amount):,}".replace(",", " ")
+    return f"{amount:,.2f}".replace(",", " ").rstrip("0").rstrip(".")
+
+
+def _render_trip_type(value: str) -> str:
+    return "в одну сторону" if value == TripType.ONE_WAY.value else "туда-обратно"
+
+
+def _render_baggage_policy(value: str) -> str:
+    labels = {
+        BaggagePolicy.IGNORE.value: "не важно",
+        BaggagePolicy.OPTIONAL.value: "желательно",
+        BaggagePolicy.REQUIRED.value: "обязательно",
+    }
+    return labels.get(value, value)
