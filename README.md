@@ -71,6 +71,7 @@ Must be set before first run:
 
 ## Main bot commands
 
+- Bot management flows are intended to run in a private chat with the bot.
 - `/start`
 - `/new`
 - `/subscriptions`
@@ -135,6 +136,8 @@ make init-env
 
 - Verify `TELEGRAM_BOT_TOKEN`.
 - Check that your Telegram user id is present in `TELEGRAM_ALLOWED_USER_IDS`.
+- Make sure you are talking to the bot in a private chat, not in a group.
+- Telegram group privacy mode can pass `/new` but suppress the next plain-text reply in the dialog.
 - Check worker logs: `make docker-logs`.
 
 ### Admin API returns `401`

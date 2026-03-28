@@ -7,7 +7,7 @@ from decimal import Decimal, InvalidOperation
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, Chat, ErrorEvent, Message
 
 from app.bot.keyboards.subscriptions import baggage_keyboard, confirm_keyboard, return_mode_keyboard, subscription_actions_keyboard, trip_type_keyboard, yes_no_keyboard
 from app.bot.states import NewSubscriptionStates
@@ -32,6 +32,14 @@ def build_subscription_router(
 
     async def ensure_access(message_or_callback: Message | CallbackQuery) -> bool:
         user = message_or_callback.from_user
+        chat = message_or_callback.message.chat if isinstance(message_or_callback, CallbackQuery) else message_or_callback.chat
+        if not _is_private_chat(chat):
+            target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
+            await target.answer(
+                "Этот бот работает только в личном чате.\n"
+                "Открой диалог с ботом один на один и повтори команду."
+            )
+            return False
         if user is None or user.id not in settings.allowed_user_ids:
             target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
             user_id = user.id if user is not None else "unknown"
@@ -46,6 +54,19 @@ def build_subscription_router(
                 "Добавь его в <code>TELEGRAM_ALLOWED_USER_IDS</code> и перезапусти worker."
             )
             return False
+        return True
+
+    @router.error()
+    async def error_handler(event: ErrorEvent) -> bool:
+        logger.exception("telegram_handler_failed", exc_info=event.exception)
+        update = event.update
+        if update.message is not None:
+            await update.message.answer("Что-то пошло не так на этом шаге. Попробуй еще раз или начни заново через /new.")
+        elif update.callback_query is not None and update.callback_query.message is not None:
+            await update.callback_query.message.answer(
+                "Что-то пошло не так на этом шаге. Попробуй еще раз или начни заново через /new."
+            )
+            await update.callback_query.answer()
         return True
 
     @router.message(Command("start"))
@@ -460,3 +481,7 @@ def _render_state_summary(data: dict) -> str:
         ]
     )
     return "\n".join(parts)
+
+
+def _is_private_chat(chat: Chat | None) -> bool:
+    return bool(chat and chat.type == "private")
