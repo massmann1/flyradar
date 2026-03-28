@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
@@ -17,6 +18,8 @@ from app.domain.schemas import SubscriptionCreate
 from app.services.alerts import AlertService
 from app.services.subscriptions import SubscriptionService
 
+logger = logging.getLogger(__name__)
+
 
 def build_subscription_router(
     *,
@@ -31,7 +34,17 @@ def build_subscription_router(
         user = message_or_callback.from_user
         if user is None or user.id not in settings.allowed_user_ids:
             target = message_or_callback.message if isinstance(message_or_callback, CallbackQuery) else message_or_callback
-            await target.answer("Доступ запрещен.")
+            user_id = user.id if user is not None else "unknown"
+            username = user.username if user is not None else None
+            logger.warning(
+                "telegram_access_denied",
+                extra={"telegram_user_id": user_id, "telegram_username": username},
+            )
+            await target.answer(
+                "Доступ запрещен.\n"
+                f"Твой Telegram ID: <code>{user_id}</code>\n"
+                "Добавь его в <code>TELEGRAM_ALLOWED_USER_IDS</code> и перезапусти worker."
+            )
             return False
         return True
 

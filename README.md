@@ -48,7 +48,7 @@ Must be set before first run:
 - `POSTGRES_PASSWORD`
 - `ADMIN_API_TOKEN`
 - `TELEGRAM_BOT_TOKEN`
-- `TELEGRAM_ALLOWED_USER_IDS`
+- `TELEGRAM_ALLOWED_USER_IDS` - numeric Telegram user IDs, comma-separated
 - `TRAVELPAYOUTS_API_TOKEN`
 
 ## Local start with Docker Compose
