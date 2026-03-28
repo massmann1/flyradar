@@ -147,3 +147,17 @@ class NotificationDTO(BaseModel):
     currency: str
     chat_id: int
     message_text: str
+
+
+class PriceHistoryPoint(BaseModel):
+    day: date
+    price_amount: Decimal
+
+
+class PriceHistoryContext(BaseModel):
+    lookback_days: int
+    min_price: Decimal
+    min_price_day: date | None = None
+    delta_to_min: Decimal
+    sample_days: int = 0
+    points: list[PriceHistoryPoint] = Field(default_factory=list)

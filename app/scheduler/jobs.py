@@ -13,4 +13,5 @@ def build_scheduler(settings: Settings, alert_service: AlertService) -> AsyncIOS
     )
     scheduler.add_job(alert_service.run_due_subscriptions, "interval", seconds=settings.scheduler_tick_seconds, id="run_due_subscriptions")
     scheduler.add_job(alert_service.retry_pending_notifications, "interval", seconds=30, id="retry_pending_notifications")
+    scheduler.add_job(alert_service.cleanup_old_data, "cron", hour=3, minute=17, id="cleanup_old_data")
     return scheduler

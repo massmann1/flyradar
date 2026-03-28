@@ -11,6 +11,7 @@ from app.core.config import Settings
 from app.core.db import build_engine, build_session_factory
 from app.services.alerts import AlertService
 from app.services.notifications import NotificationService
+from app.services.price_history import PriceHistoryService
 from app.services.subscriptions import SubscriptionService
 
 
@@ -22,6 +23,7 @@ class AppContainer:
     http_client: httpx.AsyncClient
     travelpayouts_client: TravelpayoutsRestClient
     subscription_service: SubscriptionService
+    price_history_service: PriceHistoryService
     notification_service: NotificationService
     alert_service: AlertService
 
@@ -35,12 +37,14 @@ def create_container(settings: Settings, *, bot: Bot | None = None) -> AppContai
     session_factory = build_session_factory(engine)
     http_client = httpx.AsyncClient()
     travelpayouts_client = TravelpayoutsRestClient(http_client=http_client, settings=settings)
-    notification_service = NotificationService(session_factory=session_factory, bot=bot)
+    price_history_service = PriceHistoryService(session_factory=session_factory, settings=settings)
+    notification_service = NotificationService(session_factory=session_factory, price_history_service=price_history_service, bot=bot)
     subscription_service = SubscriptionService(session_factory=session_factory, settings=settings)
     alert_service = AlertService(
         session_factory=session_factory,
         settings=settings,
         travelpayouts_client=travelpayouts_client,
+        price_history_service=price_history_service,
         notification_service=notification_service,
     )
     return AppContainer(
@@ -50,6 +54,7 @@ def create_container(settings: Settings, *, bot: Bot | None = None) -> AppContai
         http_client=http_client,
         travelpayouts_client=travelpayouts_client,
         subscription_service=subscription_service,
+        price_history_service=price_history_service,
         notification_service=notification_service,
         alert_service=alert_service,
     )

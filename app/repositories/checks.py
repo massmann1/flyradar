@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import CheckStatus, CheckTrigger
@@ -43,3 +43,12 @@ class CheckRepository:
             .limit(1)
         )
         return result.scalar_one_or_none()
+
+    async def delete_finished_before(self, session: AsyncSession, *, older_than: datetime) -> int:
+        result = await session.execute(
+            delete(SubscriptionCheck).where(
+                SubscriptionCheck.finished_at.is_not(None),
+                SubscriptionCheck.finished_at < older_than,
+            )
+        )
+        return result.rowcount or 0

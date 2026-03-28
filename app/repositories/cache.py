@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.models import ApiCache
@@ -52,3 +52,7 @@ class ApiCacheRepository:
         cached.expires_at = expires_at
         cached.http_status = http_status
         return cached
+
+    async def delete_expired_before(self, session: AsyncSession, *, older_than: datetime) -> int:
+        result = await session.execute(delete(ApiCache).where(ApiCache.expires_at < older_than))
+        return result.rowcount or 0

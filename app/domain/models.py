@@ -66,6 +66,7 @@ class Subscription(Base):
 
 class Offer(Base):
     __tablename__ = "offers"
+    __table_args__ = (Index("ix_offers_last_seen_at", "last_seen_at"),)
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     stable_variant_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
@@ -93,6 +94,7 @@ class Offer(Base):
 class OfferPrice(Base):
     __tablename__ = "offer_prices"
     __table_args__ = (
+        Index("ix_offer_prices_observed_at", "observed_at"),
         Index("ix_offer_prices_subscription_observed_at", "subscription_id", "observed_at"),
         Index("ix_offer_prices_offer_observed_at", "offer_id", "observed_at"),
     )
@@ -111,9 +113,34 @@ class OfferPrice(Base):
     subscription: Mapped[Subscription] = relationship(back_populates="offer_prices")
 
 
+class OfferPriceDailyStat(Base):
+    __tablename__ = "offer_price_daily_stats"
+    __table_args__ = (
+        UniqueConstraint("subscription_id", "offer_id", "day", "currency", name="uq_offer_price_daily_stats_key"),
+        Index("ix_offer_price_daily_stats_day", "day"),
+        Index("ix_offer_price_daily_stats_subscription_day", "subscription_id", "day"),
+        Index("ix_offer_price_daily_stats_offer_day", "offer_id", "day"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    offer_id: Mapped[int] = mapped_column(ForeignKey("offers.id", ondelete="CASCADE"))
+    subscription_id: Mapped[str] = mapped_column(ForeignKey("subscriptions.id", ondelete="CASCADE"))
+    day: Mapped[date] = mapped_column(Date)
+    currency: Mapped[str] = mapped_column(String(3))
+    min_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    max_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    avg_price: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    sample_count: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
 class SubscriptionCheck(Base):
     __tablename__ = "subscription_checks"
-    __table_args__ = (Index("ix_subscription_checks_subscription_started_at", "subscription_id", "started_at"),)
+    __table_args__ = (
+        Index("ix_subscription_checks_subscription_started_at", "subscription_id", "started_at"),
+        Index("ix_subscription_checks_finished_at", "finished_at"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     subscription_id: Mapped[str] = mapped_column(ForeignKey("subscriptions.id", ondelete="CASCADE"))
@@ -134,6 +161,7 @@ class SubscriptionCheck(Base):
 class NotificationEvent(Base):
     __tablename__ = "notification_events"
     __table_args__ = (
+        Index("ix_notification_events_created_at", "created_at"),
         Index("ix_notification_events_subscription_dedupe_created", "subscription_id", "dedupe_key", "created_at"),
     )
 

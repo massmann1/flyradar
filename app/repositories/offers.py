@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.domain.models import Offer, OfferPrice
+from app.domain.models import Offer, OfferPrice, OfferPriceDailyStat
 from app.domain.schemas import OfferDTO
 
 
@@ -100,6 +100,142 @@ class OfferRepository:
         session.add(offer_price)
         await session.flush()
         return offer_price
+
+    async def list_old_price_observations(
+        self,
+        session: AsyncSession,
+        *,
+        older_than: datetime,
+        limit: int,
+    ) -> list[OfferPrice]:
+        result = await session.execute(
+            select(OfferPrice)
+            .where(OfferPrice.observed_at < older_than)
+            .order_by(OfferPrice.observed_at.asc())
+            .limit(limit)
+        )
+        return list(result.scalars().all())
+
+    async def delete_price_observations(self, session: AsyncSession, *, price_ids: list[int]) -> int:
+        if not price_ids:
+            return 0
+        result = await session.execute(delete(OfferPrice).where(OfferPrice.id.in_(price_ids)))
+        return result.rowcount or 0
+
+    async def get_daily_stat(
+        self,
+        session: AsyncSession,
+        *,
+        subscription_id: str,
+        offer_id: int,
+        day,
+        currency: str,
+    ) -> OfferPriceDailyStat | None:
+        result = await session.execute(
+            select(OfferPriceDailyStat).where(
+                OfferPriceDailyStat.subscription_id == subscription_id,
+                OfferPriceDailyStat.offer_id == offer_id,
+                OfferPriceDailyStat.day == day,
+                OfferPriceDailyStat.currency == currency,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def upsert_daily_stat(
+        self,
+        session: AsyncSession,
+        *,
+        subscription_id: str,
+        offer_id: int,
+        day,
+        currency: str,
+        min_price: Decimal,
+        max_price: Decimal,
+        avg_price: Decimal,
+        sample_count: int,
+    ) -> OfferPriceDailyStat:
+        existing = await self.get_daily_stat(
+            session,
+            subscription_id=subscription_id,
+            offer_id=offer_id,
+            day=day,
+            currency=currency,
+        )
+        if existing is None:
+            stat = OfferPriceDailyStat(
+                subscription_id=subscription_id,
+                offer_id=offer_id,
+                day=day,
+                currency=currency,
+                min_price=min_price,
+                max_price=max_price,
+                avg_price=avg_price,
+                sample_count=sample_count,
+            )
+            session.add(stat)
+            await session.flush()
+            return stat
+
+        total_count = existing.sample_count + sample_count
+        existing.min_price = min(existing.min_price, min_price)
+        existing.max_price = max(existing.max_price, max_price)
+        existing.avg_price = (
+            ((existing.avg_price * existing.sample_count) + (avg_price * sample_count)) / total_count
+        ).quantize(Decimal("0.01"))
+        existing.sample_count = total_count
+        return existing
+
+    async def list_daily_price_points(
+        self,
+        session: AsyncSession,
+        *,
+        subscription_id: str,
+        offer_id: int,
+        since_day,
+    ) -> list[tuple]:
+        result = await session.execute(
+            select(OfferPriceDailyStat.day, OfferPriceDailyStat.min_price)
+            .where(
+                OfferPriceDailyStat.subscription_id == subscription_id,
+                OfferPriceDailyStat.offer_id == offer_id,
+                OfferPriceDailyStat.day >= since_day,
+            )
+            .order_by(OfferPriceDailyStat.day.asc())
+        )
+        return list(result.all())
+
+    async def list_recent_detail_price_points(
+        self,
+        session: AsyncSession,
+        *,
+        subscription_id: str,
+        offer_id: int,
+        since: datetime,
+    ) -> list[tuple]:
+        day_label = func.date(OfferPrice.observed_at)
+        result = await session.execute(
+            select(day_label.label("day"), func.min(OfferPrice.price_amount).label("price"))
+            .where(
+                OfferPrice.subscription_id == subscription_id,
+                OfferPrice.offer_id == offer_id,
+                OfferPrice.observed_at >= since,
+            )
+            .group_by(day_label)
+            .order_by(day_label.asc())
+        )
+        return list(result.all())
+
+    async def prune_old_daily_stats(self, session: AsyncSession, *, older_than) -> int:
+        result = await session.execute(delete(OfferPriceDailyStat).where(OfferPriceDailyStat.day < older_than))
+        return result.rowcount or 0
+
+    async def clear_raw_payload_before(self, session: AsyncSession, *, older_than: datetime) -> int:
+        result = await session.execute(
+            update(Offer)
+            .where(Offer.last_seen_at < older_than)
+            .values(raw_payload={})
+        )
+        return result.rowcount or 0
 
     async def list_recent_for_subscription(self, session: AsyncSession, subscription_id: str, limit: int = 5) -> list[tuple[Offer, OfferPrice]]:
         result = await session.execute(

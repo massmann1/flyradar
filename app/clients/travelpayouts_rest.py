@@ -236,7 +236,7 @@ class TravelpayoutsRestClient:
                 deeplink=item.get("link"),
                 source_endpoint=endpoint,
                 found_at=_parse_dt(item.get("found_at")) or datetime.now(timezone.utc),
-                raw_payload=item,
+                raw_payload=_stored_offer_payload(item, store_raw_payload=self._settings.store_raw_payload),
             )
         except (ValidationError, TypeError, ValueError, ArithmeticError) as exc:
             logger.warning("skip_invalid_offer", extra={"endpoint": endpoint, "error": str(exc), "item": item})
@@ -289,3 +289,25 @@ def _extract_airline_name(item: dict, locale: str) -> str | None:
     if isinstance(name, str) and name.strip():
         return name.strip()
     return None
+
+
+def _stored_offer_payload(item: dict, *, store_raw_payload: bool) -> dict:
+    if store_raw_payload:
+        return item
+    keys = (
+        "origin",
+        "destination",
+        "origin_airport",
+        "destination_airport",
+        "departure_at",
+        "return_at",
+        "price",
+        "airline",
+        "flight_number",
+        "transfers",
+        "return_transfers",
+        "duration",
+        "link",
+        "found_at",
+    )
+    return {key: item.get(key) for key in keys if key in item}

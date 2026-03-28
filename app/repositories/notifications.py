@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import desc, select
+from sqlalchemy import delete, desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.domain.enums import NotificationStatus
@@ -85,3 +85,7 @@ class NotificationRepository:
             select(NotificationEvent).order_by(NotificationEvent.created_at.desc()).limit(limit)
         )
         return list(result.scalars().all())
+
+    async def delete_created_before(self, session: AsyncSession, *, older_than: datetime) -> int:
+        result = await session.execute(delete(NotificationEvent).where(NotificationEvent.created_at < older_than))
+        return result.rowcount or 0

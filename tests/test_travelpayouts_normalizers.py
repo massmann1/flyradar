@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from app.clients.travelpayouts_rest import _flatten_offer_items, _parse_dt
+from app.clients.travelpayouts_rest import _flatten_offer_items, _parse_dt, _stored_offer_payload
 
 
 def test_parse_dt_supports_short_date() -> None:
@@ -71,3 +71,22 @@ def test_normalize_offers_skips_invalid_items(travelpayouts_client) -> None:
 
     assert len(offers) == 1
     assert offers[0].price_amount == 9900
+
+
+def test_stored_offer_payload_can_be_compacted() -> None:
+    payload = _stored_offer_payload(
+        {
+            "origin": "MOW",
+            "destination": "IST",
+            "price": 9900,
+            "airline": "TK",
+            "extra_field": "drop-me",
+        },
+        store_raw_payload=False,
+    )
+    assert payload == {
+        "origin": "MOW",
+        "destination": "IST",
+        "price": 9900,
+        "airline": "TK",
+    }

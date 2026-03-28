@@ -31,10 +31,19 @@ class Settings(BaseSettings):
     default_check_interval_minutes: int = Field(default=60, alias="DEFAULT_CHECK_INTERVAL_MINUTES")
     scheduler_tick_seconds: int = Field(default=60, alias="SCHEDULER_TICK_SECONDS")
     max_concurrent_checks: int = Field(default=3, alias="MAX_CONCURRENT_CHECKS")
+    stored_offers_per_check: int = Field(default=3, alias="STORED_OFFERS_PER_CHECK")
     search_cache_ttl_seconds: int = Field(default=1800, alias="SEARCH_CACHE_TTL_SECONDS")
     alert_cooldown_hours: int = Field(default=12, alias="ALERT_COOLDOWN_HOURS")
     min_price_drop_abs: int = Field(default=500, alias="MIN_PRICE_DROP_ABS")
     min_price_drop_pct: int = Field(default=5, alias="MIN_PRICE_DROP_PCT")
+    api_cache_retention_days: int = Field(default=3, alias="API_CACHE_RETENTION_DAYS")
+    subscription_checks_retention_days: int = Field(default=30, alias="SUBSCRIPTION_CHECKS_RETENTION_DAYS")
+    notification_events_retention_days: int = Field(default=90, alias="NOTIFICATION_EVENTS_RETENTION_DAYS")
+    offer_price_detail_retention_days: int = Field(default=45, alias="OFFER_PRICE_DETAIL_RETENTION_DAYS")
+    offer_price_daily_retention_days: int = Field(default=365, alias="OFFER_PRICE_DAILY_RETENTION_DAYS")
+    history_context_days: int = Field(default=30, alias="HISTORY_CONTEXT_DAYS")
+    cleanup_batch_size: int = Field(default=1000, alias="CLEANUP_BATCH_SIZE")
+    store_raw_payload: bool = Field(default=False, alias="STORE_RAW_PAYLOAD")
 
     @computed_field
     @property
