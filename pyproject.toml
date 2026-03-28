@@ -1,0 +1,36 @@
+[project]
+name = "flight-alerts"
+version = "0.1.0"
+description = "Telegram-first flight alerts backend powered by Travelpayouts data API"
+requires-python = ">=3.12"
+dependencies = [
+  "aiogram>=3.18.0,<4.0.0",
+  "alembic>=1.14.0,<2.0.0",
+  "apscheduler>=3.10.4,<4.0.0",
+  "fastapi>=0.115.0,<1.0.0",
+  "httpx>=0.28.0,<1.0.0",
+  "pydantic>=2.10.0,<3.0.0",
+  "pydantic-settings>=2.7.0,<3.0.0",
+  "psycopg[binary]>=3.2.0,<4.0.0",
+  "python-dateutil>=2.9.0,<3.0.0",
+  "python-json-logger>=2.0.7,<3.0.0",
+  "sqlalchemy>=2.0.36,<3.0.0",
+  "uvicorn[standard]>=0.34.0,<1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.0,<9.0.0",
+  "pytest-asyncio>=0.25.0,<1.0.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

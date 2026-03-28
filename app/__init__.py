@@ -1,0 +1,1 @@
+"""Flight alerts application package."""

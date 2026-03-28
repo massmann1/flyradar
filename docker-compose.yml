@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:16-alpine
+    init: true
+    environment:
+      POSTGRES_DB: flight_alerts
+      POSTGRES_USER: flight_alerts
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=128MB
+      - -c
+      - max_connections=20
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U flight_alerts -d flight_alerts"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  api:
+    build: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    init: true
+    command: ["python", "-m", "app.main_api"]
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8000:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=5).read()",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    build: .
+    env_file:
+      - ${ENV_FILE:-.env}
+    init: true
+    command: ["python", "-m", "app.main_worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  db_data:
