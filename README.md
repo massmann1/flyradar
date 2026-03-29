@@ -2,6 +2,8 @@
 
 Telegram-first backend for cheap flight alerts based on Travelpayouts Data API.
 
+Detailed project context, architecture, runtime flows, constraints, and debugging notes are documented in [docs/PROJECT_CONTEXT.md](/Users/ilnurgaliullin/Documents/Playground/flight-alerts/docs/PROJECT_CONTEXT.md).
+
 ## MVP Scope
 
 - Telegram bot is the primary UI.
