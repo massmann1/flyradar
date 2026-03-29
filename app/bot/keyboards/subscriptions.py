@@ -33,15 +33,16 @@ def trip_type_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def return_mode_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Даты возврата", callback_data="new:return:dates"),
-                InlineKeyboardButton(text="Длительность", callback_data="new:return:duration"),
-            ]
+def return_mode_keyboard(*, include_edit_departure: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="Даты возврата", callback_data="new:return:dates"),
+            InlineKeyboardButton(text="Длительность", callback_data="new:return:duration"),
         ]
-    )
+    ]
+    if include_edit_departure:
+        rows.append([InlineKeyboardButton(text="Изменить даты вылета", callback_data="new:edit:departure")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def date_input_mode_keyboard(prefix: str) -> InlineKeyboardMarkup:
@@ -56,6 +57,19 @@ def date_input_mode_keyboard(prefix: str) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def edit_dates_keyboard(*contexts: str) -> InlineKeyboardMarkup:
+    labels = {
+        "departure": "Изменить даты вылета",
+        "return": "Изменить даты возврата",
+    }
+    rows: list[list[InlineKeyboardButton]] = []
+    for context in contexts:
+        label = labels.get(context)
+        if label:
+            rows.append([InlineKeyboardButton(text=label, callback_data=f"new:edit:{context}")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def yes_no_keyboard(prefix: str) -> InlineKeyboardMarkup:

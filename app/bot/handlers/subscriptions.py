@@ -15,6 +15,7 @@ from app.bot.keyboards.subscriptions import (
     calendar_keyboard,
     confirm_keyboard,
     date_input_mode_keyboard,
+    edit_dates_keyboard,
     return_mode_keyboard,
     subscription_actions_keyboard,
     trip_type_keyboard,
@@ -83,13 +84,13 @@ def build_subscription_router(
     async def start_handler(message: Message) -> None:
         if not await ensure_access(message):
             return
-        await message.answer(
-            "Бот управления подписками на дешевые билеты.\n\n"
-            "Команды:\n"
-            "/new - создать подписку\n"
-            "/subscriptions - мои подписки\n"
-            "/cancel - отменить текущий диалог"
-        )
+        await message.answer(_build_help_text())
+
+    @router.message(Command("help"))
+    async def help_handler(message: Message) -> None:
+        if not await ensure_access(message):
+            return
+        await message.answer(_build_help_text())
 
     @router.message(Command("cancel"))
     async def cancel_handler(message: Message, state: FSMContext) -> None:
@@ -103,6 +104,7 @@ def build_subscription_router(
         if not await ensure_access(message):
             return
         await state.clear()
+        await state.update_data(currency=settings.travelpayouts_default_currency.upper())
         await state.set_state(NewSubscriptionStates.name)
         await message.answer("Название подписки?")
 
@@ -177,7 +179,10 @@ def build_subscription_router(
         if mode == "manual":
             await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
             await state.set_state(NewSubscriptionStates.departure_dates)
-            await callback.message.answer(_manual_date_prompt("вылета"))
+            await callback.message.answer(
+                _manual_date_prompt("вылета", allow_retry=True),
+                reply_markup=edit_dates_keyboard("departure"),
+            )
         else:
             await _start_calendar_selection(
                 message=callback.message,
@@ -195,7 +200,10 @@ def build_subscription_router(
         try:
             date_from, date_to = _parse_date_range(message.text)
         except ValueError:
-            await message.answer(_manual_date_prompt("вылета"))
+            await message.answer(
+                _manual_date_prompt("вылета", allow_retry=True),
+                reply_markup=edit_dates_keyboard("departure"),
+            )
             return
 
         await state.update_data(
@@ -233,7 +241,10 @@ def build_subscription_router(
         if mode == "manual":
             await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
             await state.set_state(NewSubscriptionStates.return_dates)
-            await callback.message.answer(_manual_date_prompt("возврата"))
+            await callback.message.answer(
+                _manual_date_prompt("возврата", allow_retry=True),
+                reply_markup=edit_dates_keyboard("return"),
+            )
         else:
             await _start_calendar_selection(
                 message=callback.message,
@@ -255,7 +266,7 @@ def build_subscription_router(
             return
 
         if data.get("calendar_context") != context:
-            await callback.answer("Этот календарь уже устарел. Начни шаг заново.", show_alert=True)
+            await callback.answer("Этот календарь уже устарел. Используй кнопку «Изменить даты».", show_alert=True)
             return
 
         mode = data.get("calendar_mode", "fixed")
@@ -356,7 +367,10 @@ def build_subscription_router(
         try:
             date_from, date_to = _parse_date_range(message.text)
         except ValueError:
-            await message.answer(_manual_date_prompt("возврата"))
+            await message.answer(
+                _manual_date_prompt("возврата", allow_retry=True),
+                reply_markup=edit_dates_keyboard("return"),
+            )
             return
         await state.update_data(
             return_date_from=date_from.isoformat(),
@@ -378,7 +392,7 @@ def build_subscription_router(
             return
         await state.update_data(min_trip_duration_days=min_days, max_trip_duration_days=max_days)
         await state.set_state(NewSubscriptionStates.max_price)
-        await message.answer(_max_price_prompt())
+        await message.answer(_max_price_prompt(), reply_markup=edit_dates_keyboard("departure"))
 
     @router.message(NewSubscriptionStates.max_price)
     async def max_price_handler(message: Message, state: FSMContext) -> None:
@@ -436,18 +450,50 @@ def build_subscription_router(
     async def baggage_handler(callback: CallbackQuery, state: FSMContext) -> None:
         if not await ensure_access(callback):
             return
-        await state.update_data(baggage_policy=callback.data.rsplit(":", 1)[-1])
-        await state.set_state(NewSubscriptionStates.currency)
-        await callback.message.answer("Валюта алертов? Например RUB, USD, EUR.")
+        await state.update_data(
+            baggage_policy=callback.data.rsplit(":", 1)[-1],
+            currency=settings.travelpayouts_default_currency.upper(),
+        )
+        await state.set_state(NewSubscriptionStates.confirm)
+        await callback.message.answer(_render_state_summary(await state.get_data()), reply_markup=confirm_keyboard())
         await callback.answer()
 
-    @router.message(NewSubscriptionStates.currency)
-    async def currency_handler(message: Message, state: FSMContext) -> None:
-        if not await ensure_access(message):
+    @router.callback_query(F.data.startswith("new:edit:"))
+    async def edit_dates_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await ensure_access(callback):
             return
-        await state.update_data(currency=message.text.strip().upper())
-        await state.set_state(NewSubscriptionStates.confirm)
-        await message.answer(_render_state_summary(await state.get_data()), reply_markup=confirm_keyboard())
+        context = callback.data.rsplit(":", 1)[-1]
+        await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
+
+        if context == "departure":
+            await state.update_data(
+                departure_date_from=None,
+                departure_date_to=None,
+                return_mode=None,
+                return_date_from=None,
+                return_date_to=None,
+                min_trip_duration_days=None,
+                max_trip_duration_days=None,
+            )
+            await state.set_state(NewSubscriptionStates.departure_mode)
+            await callback.message.answer(
+                "Давай выберем даты вылета заново.",
+                reply_markup=date_input_mode_keyboard("new:departure_mode"),
+            )
+            await callback.answer()
+            return
+
+        if context == "return":
+            await state.update_data(return_mode="dates", return_date_from=None, return_date_to=None)
+            await state.set_state(NewSubscriptionStates.return_date_mode)
+            await callback.message.answer(
+                "Давай выберем даты возврата заново.",
+                reply_markup=date_input_mode_keyboard("new:return_date_mode"),
+            )
+            await callback.answer()
+            return
+
+        await callback.answer()
 
     @router.callback_query(NewSubscriptionStates.confirm, F.data == "new:confirm:create")
     async def confirm_create_handler(callback: CallbackQuery, state: FSMContext) -> None:
@@ -466,7 +512,7 @@ def build_subscription_router(
             min_trip_duration_days=data.get("min_trip_duration_days"),
             max_trip_duration_days=data.get("max_trip_duration_days"),
             max_price=Decimal(data["max_price"]) if data.get("max_price") else None,
-            currency=data["currency"],
+            currency=data.get("currency", settings.travelpayouts_default_currency.upper()),
             market=settings.travelpayouts_default_market,
             direct_only=data["direct_only"],
             baggage_policy=BaggagePolicy(data["baggage_policy"]),
@@ -617,6 +663,7 @@ def _parse_duration_range(value: str) -> tuple[int, int | None]:
 
 
 def _render_state_summary(data: dict) -> str:
+    currency = data.get("currency", "RUB")
     parts = [
         "<b>Проверь подписку</b>",
         f"Название: {data['name']}",
@@ -637,10 +684,31 @@ def _render_state_summary(data: dict) -> str:
             f"Интервал: {data['check_interval_minutes']} минут",
             f"Авиакомпании: {', '.join(data.get('preferred_airlines', [])) or '-'}",
             f"Багаж: {_render_baggage_policy(data['baggage_policy'])}",
-            f"Валюта: {data['currency']}",
+            f"Валюта: {currency} (по умолчанию)",
         ]
     )
     return "\n".join(parts)
+
+
+def _build_help_text() -> str:
+    return (
+        "Бот ищет дешевые авиабилеты по твоим подпискам и присылает уведомления.\n\n"
+        "<b>Основные команды</b>\n"
+        "/new - создать новую подписку\n"
+        "/subscriptions - показать мои подписки\n"
+        "/subs - короткая команда для списка подписок\n"
+        "/help - показать инструкцию\n"
+        "/cancel - отменить текущий диалог\n\n"
+        "<b>Как пользоваться</b>\n"
+        "1. Напиши /new\n"
+        "2. Укажи маршрут, даты, лимит цены и интервал проверки\n"
+        "3. Бот начнет проверять цены автоматически\n\n"
+        "<b>Подсказки</b>\n"
+        "• Город можно вводить названием или IATA-кодом, например <code>MOW</code>, <code>BKK</code>, <code>NHA</code>\n"
+        "• Максимальную цену можно писать как <code>45000</code>, <code>45 000</code> или просто <code>45</code> для 45 000 ₽\n"
+        "• Валюта в боте фиксирована: <b>RUB</b>\n"
+        "• Если ошибся в датах, используй кнопку <b>Изменить даты</b> в следующем сообщении"
+    )
 
 
 def _is_private_chat(chat: Chat | None) -> bool:
@@ -651,16 +719,16 @@ async def _after_departure_dates_selected(message: Message, state: FSMContext) -
     data = await state.get_data()
     if data["trip_type"] == TripType.ONE_WAY.value:
         await state.set_state(NewSubscriptionStates.max_price)
-        await message.answer(_max_price_prompt())
+        await message.answer(_max_price_prompt(), reply_markup=edit_dates_keyboard("departure"))
         return
 
     await state.set_state(NewSubscriptionStates.return_mode)
-    await message.answer("Как задавать обратный путь?", reply_markup=return_mode_keyboard())
+    await message.answer("Как задавать обратный путь?", reply_markup=return_mode_keyboard(include_edit_departure=True))
 
 
 async def _after_return_dates_selected(message: Message, state: FSMContext) -> None:
     await state.set_state(NewSubscriptionStates.max_price)
-    await message.answer(_max_price_prompt())
+    await message.answer(_max_price_prompt(), reply_markup=edit_dates_keyboard("departure", "return"))
 
 
 async def _start_calendar_selection(
@@ -686,8 +754,8 @@ def _calendar_keys(context: str) -> tuple[str, str]:
     return "return_date_from", "return_date_to"
 
 
-def _manual_date_prompt(label: str) -> str:
-    return (
+def _manual_date_prompt(label: str, *, allow_retry: bool = False) -> str:
+    text = (
         f"Введи дату {label}.\n"
         "Поддерживаются оба формата:\n"
         "• 01.06.2026\n"
@@ -696,6 +764,9 @@ def _manual_date_prompt(label: str) -> str:
         "• 01.06.2026 - 12.06.2026\n"
         "• 2026-06-01:2026-06-12"
     )
+    if allow_retry:
+        text += "\n\nЕсли ошибся, нажми кнопку ниже и выбери даты заново."
+    return text
 
 
 def _max_price_prompt() -> str:

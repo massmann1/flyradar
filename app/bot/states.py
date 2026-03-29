@@ -17,5 +17,4 @@ class NewSubscriptionStates(StatesGroup):
     interval = State()
     airlines = State()
     baggage = State()
-    currency = State()
     confirm = State()
