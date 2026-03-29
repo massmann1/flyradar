@@ -135,7 +135,7 @@ def format_offer_message(
     if history_context is not None:
         parts.extend(_render_history_context(history_context=history_context, current_price=price_amount, currency=currency))
     if offer.deeplink_path:
-        parts.append(f"Ссылка: https://www.aviasales.com{offer.deeplink_path}")
+        parts.append(f"<a href=\"https://www.aviasales.com{offer.deeplink_path}\">Открыть вариант в Aviasales</a>")
     parts.append("Данные кэшированные, цена и наличие могли измениться.")
     return "\n".join(parts)
 

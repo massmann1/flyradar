@@ -42,6 +42,8 @@ def test_format_offer_message_uses_russian_reason_and_airline_name() -> None:
     assert "Найден в кэше провайдера" in message
     assert "Впервые замечен ботом" in message
     assert "Последнее наблюдение ботом" in message
+    assert "Ссылка:" not in message
+    assert "<a href=\"https://www.aviasales.com/search/mock\">Открыть вариант в Aviasales</a>" in message
     assert "Данные кэшированные, цена и наличие могли измениться." in message
 
 
