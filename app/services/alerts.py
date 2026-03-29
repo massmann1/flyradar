@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from app.clients.travelpayouts_rest import TravelpayoutsRestClient
 from app.core.config import Settings
-from app.domain.enums import CheckStatus, CheckTrigger
+from app.domain.enums import CheckStatus, CheckTrigger, TripType
 from app.domain.schemas import CheckResult, NotificationDTO
 from app.repositories.cache import ApiCacheRepository
 from app.repositories.checks import CheckRepository
@@ -261,6 +261,40 @@ class AlertService:
 
     @staticmethod
     def _offer_matches_subscription(subscription, offer) -> bool:
+        if offer.departure_at is None:
+            return False
+
+        if subscription.max_price is not None and offer.price_amount > subscription.max_price:
+            return False
+
+        departure_date = offer.departure_at.date()
+        departure_date_to = subscription.departure_date_to or subscription.departure_date_from
+        if departure_date < subscription.departure_date_from or departure_date > departure_date_to:
+            return False
+
+        if subscription.direct_only and (offer.transfers or 0) > 0:
+            return False
+
+        if subscription.trip_type == TripType.ROUND_TRIP:
+            if offer.return_at is None:
+                return False
+
+            return_date = offer.return_at.date()
+            if subscription.return_date_from is not None:
+                return_date_to = subscription.return_date_to or subscription.return_date_from
+                if return_date < subscription.return_date_from or return_date > return_date_to:
+                    return False
+
+            if subscription.min_trip_duration_days is not None:
+                trip_duration_days = (return_date - departure_date).days
+                if trip_duration_days < subscription.min_trip_duration_days:
+                    return False
+                if subscription.max_trip_duration_days is not None and trip_duration_days > subscription.max_trip_duration_days:
+                    return False
+
+            if subscription.direct_only and (offer.return_transfers or 0) > 0:
+                return False
+
         if subscription.preferred_airlines:
             if not offer.airline_iata:
                 return False
