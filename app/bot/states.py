@@ -14,7 +14,4 @@ class NewSubscriptionStates(StatesGroup):
     duration = State()
     max_price = State()
     direct_only = State()
-    interval = State()
-    airlines = State()
-    baggage = State()
     confirm = State()

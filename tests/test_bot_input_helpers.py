@@ -31,6 +31,7 @@ def test_build_help_text_lists_user_commands() -> None:
     assert "/new" in help_text
     assert "/subscriptions" in help_text
     assert "/help" in help_text
+    assert "60 минут" in help_text
 
 
 def test_render_state_summary_uses_rub_by_default() -> None:
@@ -50,3 +51,4 @@ def test_render_state_summary_uses_rub_by_default() -> None:
         }
     )
     assert "Валюта: RUB (по умолчанию)" in summary
+    assert "Проверка: каждые 60 минут" in summary

@@ -11,7 +11,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, Chat, ErrorEvent, Message
 
 from app.bot.keyboards.subscriptions import (
-    baggage_keyboard,
     calendar_keyboard,
     confirm_keyboard,
     date_input_mode_keyboard,
@@ -104,7 +103,12 @@ def build_subscription_router(
         if not await ensure_access(message):
             return
         await state.clear()
-        await state.update_data(currency=settings.travelpayouts_default_currency.upper())
+        await state.update_data(
+            currency=settings.travelpayouts_default_currency.upper(),
+            check_interval_minutes=settings.default_check_interval_minutes,
+            preferred_airlines=[],
+            baggage_policy=BaggagePolicy.IGNORE.value,
+        )
         await state.set_state(NewSubscriptionStates.name)
         await message.answer("Название подписки?")
 
@@ -411,47 +415,11 @@ def build_subscription_router(
     async def direct_only_handler(callback: CallbackQuery, state: FSMContext) -> None:
         if not await ensure_access(callback):
             return
-        await state.update_data(direct_only=callback.data.endswith("yes"))
-        await state.set_state(NewSubscriptionStates.interval)
-        await callback.message.answer("Как часто проверять? В минутах, например 30 или 60.")
-        await callback.answer()
-
-    @router.message(NewSubscriptionStates.interval)
-    async def interval_handler(message: Message, state: FSMContext) -> None:
-        if not await ensure_access(message):
-            return
-        try:
-            interval = int(message.text.strip())
-        except ValueError:
-            await message.answer("Интервал должен быть числом в минутах.")
-            return
-        if interval < 15:
-            await message.answer("Минимальный интервал 15 минут.")
-            return
-        await state.update_data(check_interval_minutes=interval)
-        await state.set_state(NewSubscriptionStates.airlines)
-        await message.answer("Предпочтительные авиакомпании через запятую или '-'")
-
-    @router.message(NewSubscriptionStates.airlines)
-    async def airlines_handler(message: Message, state: FSMContext) -> None:
-        if not await ensure_access(message):
-            return
-        text = message.text.strip()
-        airlines = [] if text == "-" else [item.strip().upper() for item in text.split(",") if item.strip()]
-        await state.update_data(preferred_airlines=airlines)
-        await state.set_state(NewSubscriptionStates.baggage)
-        await message.answer(
-            "Политика по багажу.\n"
-            "Важно: cached Data API не умеет надежно фильтровать багаж, это будет только сохранено как пожелание.",
-            reply_markup=baggage_keyboard(),
-        )
-
-    @router.callback_query(NewSubscriptionStates.baggage, F.data.startswith("new:baggage:"))
-    async def baggage_handler(callback: CallbackQuery, state: FSMContext) -> None:
-        if not await ensure_access(callback):
-            return
         await state.update_data(
-            baggage_policy=callback.data.rsplit(":", 1)[-1],
+            direct_only=callback.data.endswith("yes"),
+            check_interval_minutes=settings.default_check_interval_minutes,
+            preferred_airlines=[],
+            baggage_policy=BaggagePolicy.IGNORE.value,
             currency=settings.travelpayouts_default_currency.upper(),
         )
         await state.set_state(NewSubscriptionStates.confirm)
@@ -664,6 +632,7 @@ def _parse_duration_range(value: str) -> tuple[int, int | None]:
 
 def _render_state_summary(data: dict) -> str:
     currency = data.get("currency", "RUB")
+    interval = data.get("check_interval_minutes", 60)
     parts = [
         "<b>Проверь подписку</b>",
         f"Название: {data['name']}",
@@ -681,9 +650,7 @@ def _render_state_summary(data: dict) -> str:
         [
             f"Макс. цена: {_format_money(data.get('max_price'))}",
             f"Прямые: {'да' if data['direct_only'] else 'нет'}",
-            f"Интервал: {data['check_interval_minutes']} минут",
-            f"Авиакомпании: {', '.join(data.get('preferred_airlines', [])) or '-'}",
-            f"Багаж: {_render_baggage_policy(data['baggage_policy'])}",
+            f"Проверка: каждые {interval} минут",
             f"Валюта: {currency} (по умолчанию)",
         ]
     )
@@ -701,12 +668,13 @@ def _build_help_text() -> str:
         "/cancel - отменить текущий диалог\n\n"
         "<b>Как пользоваться</b>\n"
         "1. Напиши /new\n"
-        "2. Укажи маршрут, даты, лимит цены и интервал проверки\n"
+        "2. Укажи маршрут, даты и лимит цены\n"
         "3. Бот начнет проверять цены автоматически\n\n"
         "<b>Подсказки</b>\n"
         "• Город можно вводить названием или IATA-кодом, например <code>MOW</code>, <code>BKK</code>, <code>NHA</code>\n"
         "• Максимальную цену можно писать как <code>45000</code>, <code>45 000</code> или просто <code>45</code> для 45 000 ₽\n"
         "• Валюта в боте фиксирована: <b>RUB</b>\n"
+        "• Проверка выполняется автоматически каждые <b>60 минут</b>\n"
         "• Если ошибся в датах, используй кнопку <b>Изменить даты</b> в следующем сообщении"
     )
 
