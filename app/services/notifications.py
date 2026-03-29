@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from html import escape
 from datetime import datetime, timezone
 from decimal import Decimal
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 from aiogram import Bot
 from aiogram.types import BufferedInputFile
@@ -115,6 +117,8 @@ def format_offer_message(
     if offer.return_at:
         parts.append(f"Дата возврата: <b>{_format_trip_date(offer.return_at)}</b>")
 
+    parts.append("")
+    parts.append("<b>Сейчас</b>")
     parts.extend(
         [
             f"Цена: <b>{_format_money(price_amount)} {currency}</b>",
@@ -128,6 +132,9 @@ def format_offer_message(
         parts.append(f"Авиакомпания: <b>{airline_label}</b>")
     if previous_price is not None and previous_price > price_amount:
         parts.append(f"Прошлая отправленная цена: <b>{_format_money(previous_price)} {currency}</b>")
+
+    parts.append("")
+    parts.append("<b>Наблюдения</b>")
     if provider_found_at is not None:
         parts.append(f"Найден в кэше провайдера: <b>{_format_timestamp(provider_found_at)}</b>")
     parts.append(f"Впервые замечен ботом: <b>{_format_timestamp(offer.first_seen_at)}</b>")
@@ -135,7 +142,9 @@ def format_offer_message(
     if history_context is not None:
         parts.extend(_render_history_context(history_context=history_context, current_price=price_amount, currency=currency))
     if offer.deeplink_path:
-        parts.append(f"<a href=\"https://www.aviasales.com{offer.deeplink_path}\">Открыть вариант в Aviasales</a>")
+        parts.append("")
+        parts.append(f"<a href=\"{escape(_build_offer_link(offer.deeplink_path), quote=True)}\">Открыть вариант в Aviasales</a>")
+    parts.append("")
     parts.append("Данные кэшированные, цена и наличие могли измениться.")
     return "\n".join(parts)
 
@@ -173,6 +182,18 @@ def _format_money(value: Decimal) -> str:
     if value == value.to_integral_value():
         return f"{int(value):,}".replace(",", " ")
     return f"{value:,.2f}".replace(",", " ").rstrip("0").rstrip(".")
+
+
+def _build_offer_link(deeplink_path: str) -> str:
+    absolute_url = urljoin("https://www.aviasales.com", deeplink_path)
+    split = urlsplit(absolute_url)
+    query_items = parse_qsl(split.query, keep_blank_values=True)
+    keys = {key for key, _ in query_items}
+    if "locale" not in keys:
+        query_items.append(("locale", "ru"))
+    if "currency" not in keys:
+        query_items.append(("currency", "rub"))
+    return urlunsplit((split.scheme, split.netloc, split.path, urlencode(query_items), split.fragment))
 
 
 def _render_history_context(
