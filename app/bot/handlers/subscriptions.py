@@ -108,6 +108,17 @@ def build_subscription_router(
         await state.set_state(NewSubscriptionStates.name)
         await message.answer("Название подписки?", reply_markup=menu_keyboard)
 
+    async def start_edit_dialog(message: Message, state: FSMContext, subscription) -> None:
+        await state.clear()
+        await state.update_data(_subscription_to_state_data(subscription))
+        await state.set_state(NewSubscriptionStates.name)
+        await message.answer(
+            "Редактируем подписку.\n"
+            "На текстовых шагах можно отправить <code>.</code>, чтобы оставить текущее значение.\n\n"
+            + _prompt_with_current_text("Название подписки?", subscription.name),
+            reply_markup=menu_keyboard,
+        )
+
     async def show_subscriptions_list(message: Message) -> None:
         subscriptions = await subscription_service.list_subscriptions(
             telegram_user_id=message.from_user.id,
@@ -181,45 +192,70 @@ def build_subscription_router(
     async def name_handler(message: Message, state: FSMContext) -> None:
         if not await ensure_access(message):
             return
-        await state.update_data(name=message.text.strip())
+        data = await state.get_data()
+        if not (_is_keep_value(message.text) and _is_editing(data)):
+            await state.update_data(name=message.text.strip())
         await state.set_state(NewSubscriptionStates.origin)
-        await message.answer("Откуда? Отправь IATA-код или название города.")
+        data = await state.get_data()
+        await message.answer(_prompt_with_current_text("Откуда? Отправь IATA-код или название города.", data.get("origin_iata"), editing=_is_editing(data)))
 
     @router.message(NewSubscriptionStates.origin)
     async def origin_handler(message: Message, state: FSMContext) -> None:
         if not await ensure_access(message):
             return
-        normalized = await _resolve_airport_or_city_code(message.text, travelpayouts_client)
-        if normalized is None:
-            await message.answer("Не смог распознать origin. Попробуй IATA-код или более точное название.")
-            return
-        await state.update_data(origin_iata=normalized)
+        data = await state.get_data()
+        if _is_keep_value(message.text) and _is_editing(data):
+            normalized = data.get("origin_iata")
+        else:
+            normalized = await _resolve_airport_or_city_code(message.text, travelpayouts_client)
+            if normalized is None:
+                await message.answer("Не смог распознать origin. Попробуй IATA-код или более точное название.")
+                return
+            await state.update_data(origin_iata=normalized)
         await state.set_state(NewSubscriptionStates.destination)
-        await message.answer("Куда? Отправь IATA-код или название города.")
+        data = await state.get_data()
+        await message.answer(_prompt_with_current_text("Куда? Отправь IATA-код или название города.", data.get("destination_iata"), editing=_is_editing(data)))
 
     @router.message(NewSubscriptionStates.destination)
     async def destination_handler(message: Message, state: FSMContext) -> None:
         if not await ensure_access(message):
             return
-        normalized = await _resolve_airport_or_city_code(message.text, travelpayouts_client)
-        if normalized is None:
-            await message.answer("Не смог распознать destination. Попробуй IATA-код или более точное название.")
-            return
-        await state.update_data(destination_iata=normalized)
+        data = await state.get_data()
+        if _is_keep_value(message.text) and _is_editing(data):
+            normalized = data.get("destination_iata")
+        else:
+            normalized = await _resolve_airport_or_city_code(message.text, travelpayouts_client)
+            if normalized is None:
+                await message.answer("Не смог распознать destination. Попробуй IATA-код или более точное название.")
+                return
+            await state.update_data(destination_iata=normalized)
         await state.set_state(NewSubscriptionStates.trip_type)
-        await message.answer("Тип поездки?", reply_markup=trip_type_keyboard())
+        data = await state.get_data()
+        await message.answer(
+            _prompt_with_current_choice("Тип поездки?", _render_trip_type(data["trip_type"]), editing=_is_editing(data)),
+            reply_markup=trip_type_keyboard(include_keep=_is_editing(data)),
+        )
 
     @router.callback_query(NewSubscriptionStates.trip_type, F.data.startswith("new:trip:"))
     async def trip_type_handler(callback: CallbackQuery, state: FSMContext) -> None:
         if not await ensure_access(callback):
             return
-        trip_type = TripType.ONE_WAY if callback.data.endswith("one_way") else TripType.ROUND_TRIP
+        data = await state.get_data()
+        if callback.data.endswith("keep"):
+            trip_type = TripType(data["trip_type"])
+        else:
+            trip_type = TripType.ONE_WAY if callback.data.endswith("one_way") else TripType.ROUND_TRIP
         await state.update_data(trip_type=trip_type.value)
+        if trip_type == TripType.ONE_WAY:
+            await state.update_data(return_mode=None, return_date_from=None, return_date_to=None, min_trip_duration_days=None, max_trip_duration_days=None)
         await state.set_state(NewSubscriptionStates.departure_mode)
         await callback.message.answer(
-            "Как задать даты вылета?\n"
-            "Можно выбрать через календарь или ввести вручную.",
-            reply_markup=date_input_mode_keyboard("new:departure_mode"),
+            _prompt_with_current_choice(
+                "Как задать даты вылета?\nМожно выбрать через календарь или ввести вручную.",
+                _format_date_range(data.get("departure_date_from"), data.get("departure_date_to")) if data.get("departure_date_from") else None,
+                editing=_is_editing(data),
+            ),
+            reply_markup=date_input_mode_keyboard("new:departure_mode", include_keep=_is_editing(data)),
         )
         await callback.answer()
 
@@ -228,6 +264,11 @@ def build_subscription_router(
         if not await ensure_access(callback):
             return
         mode = callback.data.rsplit(":", 1)[-1]
+        data = await state.get_data()
+        if mode == "keep" and _is_editing(data):
+            await _after_departure_dates_selected(message=callback.message, state=state)
+            await callback.answer()
+            return
         if mode == "manual":
             await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
             await state.set_state(NewSubscriptionStates.departure_dates)
@@ -271,18 +312,27 @@ def build_subscription_router(
     async def return_mode_handler(callback: CallbackQuery, state: FSMContext) -> None:
         if not await ensure_access(callback):
             return
+        data = await state.get_data()
+        if callback.data.endswith("keep") and _is_editing(data):
+            await _after_return_dates_selected(message=callback.message, state=state)
+            await callback.answer()
+            return
         if callback.data.endswith("dates"):
             await state.update_data(return_mode="dates")
             await state.set_state(NewSubscriptionStates.return_date_mode)
             await callback.message.answer(
-                "Как задать даты возврата?\n"
-                "Можно выбрать через календарь или ввести вручную.",
-                reply_markup=date_input_mode_keyboard("new:return_date_mode"),
+                _prompt_with_current_choice(
+                    "Как задать даты возврата?\nМожно выбрать через календарь или ввести вручную.",
+                    _format_date_range(data.get("return_date_from"), data.get("return_date_to")) if data.get("return_date_from") else None,
+                    editing=_is_editing(data),
+                ),
+                reply_markup=date_input_mode_keyboard("new:return_date_mode", include_keep=_is_editing(data)),
             )
         else:
             await state.update_data(return_mode="duration")
             await state.set_state(NewSubscriptionStates.duration)
-            await callback.message.answer("Длительность поездки в днях: 3 или 3-7")
+            current_duration = _format_duration_range(data.get("min_trip_duration_days"), data.get("max_trip_duration_days"))
+            await callback.message.answer(_prompt_with_current_text("Длительность поездки в днях: 3 или 3-7", current_duration, editing=_is_editing(data)))
         await callback.answer()
 
     @router.callback_query(NewSubscriptionStates.return_date_mode, F.data.startswith("new:return_date_mode:"))
@@ -290,6 +340,11 @@ def build_subscription_router(
         if not await ensure_access(callback):
             return
         mode = callback.data.rsplit(":", 1)[-1]
+        data = await state.get_data()
+        if mode == "keep" and _is_editing(data):
+            await _after_return_dates_selected(message=callback.message, state=state)
+            await callback.answer()
+            return
         if mode == "manual":
             await state.update_data(calendar_context=None, calendar_mode=None, calendar_stage=None)
             await state.set_state(NewSubscriptionStates.return_dates)
@@ -437,34 +492,60 @@ def build_subscription_router(
     async def duration_handler(message: Message, state: FSMContext) -> None:
         if not await ensure_access(message):
             return
-        try:
-            min_days, max_days = _parse_duration_range(message.text)
-        except ValueError:
-            await message.answer("Неверный формат. Используй 3 или 3-7")
-            return
-        await state.update_data(min_trip_duration_days=min_days, max_trip_duration_days=max_days)
+        data = await state.get_data()
+        if _is_keep_value(message.text) and _is_editing(data):
+            min_days = data.get("min_trip_duration_days")
+            max_days = data.get("max_trip_duration_days")
+        else:
+            try:
+                min_days, max_days = _parse_duration_range(message.text)
+            except ValueError:
+                await message.answer("Неверный формат. Используй 3 или 3-7")
+                return
+            await state.update_data(min_trip_duration_days=min_days, max_trip_duration_days=max_days)
         await state.set_state(NewSubscriptionStates.max_price)
-        await message.answer(_max_price_prompt(), reply_markup=edit_dates_keyboard("departure"))
+        data = await state.get_data()
+        await message.answer(
+            _prompt_with_current_text(_max_price_prompt(), _format_money(data.get("max_price")), editing=_is_editing(data)),
+            reply_markup=edit_dates_keyboard("departure"),
+        )
 
     @router.message(NewSubscriptionStates.max_price)
     async def max_price_handler(message: Message, state: FSMContext) -> None:
         if not await ensure_access(message):
             return
-        try:
-            parsed_price = _parse_price_input(message.text)
-        except (InvalidOperation, ValueError):
-            await message.answer(_max_price_prompt())
-            return
-        await state.update_data(max_price=str(parsed_price) if parsed_price is not None else None)
+        data = await state.get_data()
+        if _is_keep_value(message.text) and _is_editing(data):
+            parsed_price = Decimal(str(data["max_price"])) if data.get("max_price") is not None else None
+        else:
+            try:
+                parsed_price = _parse_price_input(message.text)
+            except (InvalidOperation, ValueError):
+                await message.answer(_max_price_prompt())
+                return
+            await state.update_data(max_price=str(parsed_price) if parsed_price is not None else None)
         await state.set_state(NewSubscriptionStates.direct_only)
-        await message.answer("Только прямые рейсы?", reply_markup=yes_no_keyboard("new:direct"))
+        data = await state.get_data()
+        await message.answer(
+            _prompt_with_current_choice(
+                "Только прямые рейсы?",
+                "да" if data.get("direct_only") else "нет",
+                editing=_is_editing(data),
+            ),
+            reply_markup=yes_no_keyboard("new:direct", include_keep=_is_editing(data)),
+        )
 
     @router.callback_query(NewSubscriptionStates.direct_only, F.data.startswith("new:direct:"))
     async def direct_only_handler(callback: CallbackQuery, state: FSMContext) -> None:
         if not await ensure_access(callback):
             return
+        data = await state.get_data()
+        if callback.data.endswith("keep") and _is_editing(data):
+            direct_only = data.get("direct_only", False)
+        else:
+            direct_only = callback.data.endswith("yes")
         await state.update_data(
-            direct_only=callback.data.endswith("yes"),
+            direct_only=direct_only,
             check_interval_minutes=settings.default_check_interval_minutes,
             preferred_airlines=[],
             baggage_policy=BaggagePolicy.IGNORE.value,
@@ -535,6 +616,26 @@ def build_subscription_router(
             preferred_airlines=data.get("preferred_airlines", []),
             check_interval_minutes=data["check_interval_minutes"],
         )
+        editing_subscription_id = data.get("editing_subscription_id")
+        if editing_subscription_id:
+            updated = await subscription_service.update_subscription(
+                telegram_user_id=callback.from_user.id,
+                username=callback.from_user.username,
+                subscription_id=editing_subscription_id,
+                payload=payload,
+            )
+            await state.clear()
+            if updated:
+                await callback.message.answer(
+                    f"Подписка обновлена: {editing_subscription_id}\n"
+                    "Новая проверка будет запущена автоматически в ближайшую минуту.",
+                    reply_markup=menu_keyboard,
+                )
+            else:
+                await callback.message.answer("Не удалось обновить подписку.", reply_markup=menu_keyboard)
+            await callback.answer()
+            return
+
         subscription_id = await subscription_service.create_subscription(
             telegram_user_id=callback.from_user.id,
             username=callback.from_user.username,
@@ -557,7 +658,7 @@ def build_subscription_router(
         await callback.answer()
 
     @router.callback_query(F.data.startswith("sub:"))
-    async def subscription_action_handler(callback: CallbackQuery) -> None:
+    async def subscription_action_handler(callback: CallbackQuery, state: FSMContext) -> None:
         if not await ensure_access(callback):
             return
         _, action, subscription_id = callback.data.split(":", 2)
@@ -619,6 +720,8 @@ def build_subscription_router(
                         f"{price.price_amount} {price.currency}"
                     )
                 await callback.message.answer("Последние варианты:\n" + "\n".join(lines), reply_markup=menu_keyboard)
+        elif action == "edit":
+            await start_edit_dialog(callback.message, state, subscription)
 
         await callback.answer()
 
@@ -707,6 +810,59 @@ def _render_state_summary(data: dict) -> str:
     return "\n".join(parts)
 
 
+def _subscription_to_state_data(subscription) -> dict:
+    return {
+        "editing_subscription_id": subscription.id,
+        "name": subscription.name,
+        "origin_iata": subscription.origin_iata,
+        "destination_iata": subscription.destination_iata,
+        "trip_type": subscription.trip_type.value,
+        "departure_date_from": subscription.departure_date_from.isoformat(),
+        "departure_date_to": subscription.departure_date_to.isoformat() if subscription.departure_date_to else None,
+        "return_date_from": subscription.return_date_from.isoformat() if subscription.return_date_from else None,
+        "return_date_to": subscription.return_date_to.isoformat() if subscription.return_date_to else None,
+        "min_trip_duration_days": subscription.min_trip_duration_days,
+        "max_trip_duration_days": subscription.max_trip_duration_days,
+        "max_price": str(subscription.max_price) if subscription.max_price is not None else None,
+        "currency": subscription.currency,
+        "direct_only": subscription.direct_only,
+        "check_interval_minutes": subscription.check_interval_minutes,
+        "preferred_airlines": subscription.preferred_airlines or [],
+        "baggage_policy": subscription.baggage_policy.value,
+        "return_mode": "dates" if subscription.return_date_from else ("duration" if subscription.min_trip_duration_days else None),
+    }
+
+
+def _prompt_with_current_text(prompt: str, current_value, *, editing: bool = False) -> str:
+    if not editing:
+        return prompt
+    current = current_value if current_value not in (None, "", "-") else "-"
+    return f"{prompt}\nТекущее значение: <b>{current}</b>\nОтправь <code>.</code>, чтобы оставить как есть."
+
+
+def _prompt_with_current_choice(prompt: str, current_value, *, editing: bool = False) -> str:
+    if not editing:
+        return prompt
+    current = current_value if current_value not in (None, "", "-") else "-"
+    return f"{prompt}\nТекущее значение: <b>{current}</b>\nМожно оставить текущее значение кнопкой ниже."
+
+
+def _is_editing(data: dict) -> bool:
+    return bool(data.get("editing_subscription_id"))
+
+
+def _is_keep_value(value: str | None) -> bool:
+    return (value or "").strip() == "."
+
+
+def _format_duration_range(min_days: int | None, max_days: int | None) -> str | None:
+    if min_days is None:
+        return None
+    if max_days is None or max_days == min_days:
+        return str(min_days)
+    return f"{min_days}-{max_days}"
+
+
 def _build_help_text() -> str:
     return (
         "Бот ищет дешевые авиабилеты по твоим подпискам и присылает уведомления.\n\n"
@@ -737,16 +893,28 @@ async def _after_departure_dates_selected(message: Message, state: FSMContext) -
     data = await state.get_data()
     if data["trip_type"] == TripType.ONE_WAY.value:
         await state.set_state(NewSubscriptionStates.max_price)
-        await message.answer(_max_price_prompt(), reply_markup=edit_dates_keyboard("departure"))
+        await message.answer(
+            _prompt_with_current_text(_max_price_prompt(), _format_money(data.get("max_price")), editing=_is_editing(data)),
+            reply_markup=edit_dates_keyboard("departure"),
+        )
         return
 
     await state.set_state(NewSubscriptionStates.return_mode)
-    await message.answer("Как задавать обратный путь?", reply_markup=return_mode_keyboard(include_edit_departure=True))
+    current_return = data.get("return_mode")
+    current_return_label = "даты возврата" if current_return == "dates" else ("длительность" if current_return == "duration" else None)
+    await message.answer(
+        _prompt_with_current_choice("Как задавать обратный путь?", current_return_label, editing=_is_editing(data)),
+        reply_markup=return_mode_keyboard(include_edit_departure=True, include_keep=_is_editing(data)),
+    )
 
 
 async def _after_return_dates_selected(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
     await state.set_state(NewSubscriptionStates.max_price)
-    await message.answer(_max_price_prompt(), reply_markup=edit_dates_keyboard("departure", "return"))
+    await message.answer(
+        _prompt_with_current_text(_max_price_prompt(), _format_money(data.get("max_price")), editing=_is_editing(data)),
+        reply_markup=edit_dates_keyboard("departure", "return"),
+    )
 
 
 async def _start_calendar_selection(

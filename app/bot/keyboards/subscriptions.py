@@ -27,15 +27,16 @@ _MONTH_NAMES = [
 _WEEKDAY_NAMES = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
 
 
-def trip_type_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="В одну сторону", callback_data="new:trip:one_way"),
-                InlineKeyboardButton(text="Туда-обратно", callback_data="new:trip:round_trip"),
-            ]
+def trip_type_keyboard(*, include_keep: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="В одну сторону", callback_data="new:trip:one_way"),
+            InlineKeyboardButton(text="Туда-обратно", callback_data="new:trip:round_trip"),
         ]
-    )
+    ]
+    if include_keep:
+        rows.append([InlineKeyboardButton(text="Оставить как есть", callback_data="new:trip:keep")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def main_menu_keyboard() -> ReplyKeyboardMarkup:
@@ -56,30 +57,33 @@ def main_menu_keyboard() -> ReplyKeyboardMarkup:
     )
 
 
-def return_mode_keyboard(*, include_edit_departure: bool = False) -> InlineKeyboardMarkup:
+def return_mode_keyboard(*, include_edit_departure: bool = False, include_keep: bool = False) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(text="Даты возврата", callback_data="new:return:dates"),
             InlineKeyboardButton(text="Длительность", callback_data="new:return:duration"),
         ]
     ]
+    if include_keep:
+        rows.append([InlineKeyboardButton(text="Оставить как есть", callback_data="new:return:keep")])
     if include_edit_departure:
         rows.append([InlineKeyboardButton(text="Изменить даты вылета", callback_data="new:edit:departure")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def date_input_mode_keyboard(prefix: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Одна дата", callback_data=f"{prefix}:fixed"),
-                InlineKeyboardButton(text="Диапазон", callback_data=f"{prefix}:range"),
-            ],
-            [
-                InlineKeyboardButton(text="Ввести вручную", callback_data=f"{prefix}:manual"),
-            ],
-        ]
-    )
+def date_input_mode_keyboard(prefix: str, *, include_keep: bool = False) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(text="Одна дата", callback_data=f"{prefix}:fixed"),
+            InlineKeyboardButton(text="Диапазон", callback_data=f"{prefix}:range"),
+        ],
+        [
+            InlineKeyboardButton(text="Ввести вручную", callback_data=f"{prefix}:manual"),
+        ],
+    ]
+    if include_keep:
+        rows.append([InlineKeyboardButton(text="Оставить как есть", callback_data=f"{prefix}:keep")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def edit_dates_keyboard(*contexts: str) -> InlineKeyboardMarkup:
@@ -95,15 +99,14 @@ def edit_dates_keyboard(*contexts: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def yes_no_keyboard(prefix: str) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Да", callback_data=f"{prefix}:yes"),
-                InlineKeyboardButton(text="Нет", callback_data=f"{prefix}:no"),
-            ]
-        ]
-    )
+def yes_no_keyboard(prefix: str, *, include_keep: bool = False) -> InlineKeyboardMarkup:
+    rows = [[
+        InlineKeyboardButton(text="Да", callback_data=f"{prefix}:yes"),
+        InlineKeyboardButton(text="Нет", callback_data=f"{prefix}:no"),
+    ]]
+    if include_keep:
+        rows.append([InlineKeyboardButton(text="Оставить как есть", callback_data=f"{prefix}:keep")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def calendar_keyboard(*, context: str, year: int, month: int, selected_from: date | None = None) -> InlineKeyboardMarkup:
@@ -163,6 +166,9 @@ def subscription_actions_keyboard(subscription_id: str, enabled: bool) -> Inline
             ],
             [
                 InlineKeyboardButton(text="Последние", callback_data=f"sub:latest:{subscription_id}"),
+                InlineKeyboardButton(text="Редактировать", callback_data=f"sub:edit:{subscription_id}"),
+            ],
+            [
                 InlineKeyboardButton(text="Удалить", callback_data=f"sub:delete:{subscription_id}"),
             ],
         ]

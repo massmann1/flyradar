@@ -78,3 +78,24 @@ class SubscriptionRepository:
 
     async def delete(self, session: AsyncSession, subscription_id: str) -> None:
         await session.execute(delete(Subscription).where(Subscription.id == subscription_id))
+
+    async def update(self, session: AsyncSession, *, subscription: Subscription, payload: SubscriptionCreate) -> Subscription:
+        subscription.name = payload.name
+        subscription.origin_iata = payload.origin_iata
+        subscription.destination_iata = payload.destination_iata
+        subscription.trip_type = payload.trip_type
+        subscription.departure_date_from = payload.departure_date_from
+        subscription.departure_date_to = payload.departure_date_to
+        subscription.return_date_from = payload.return_date_from
+        subscription.return_date_to = payload.return_date_to
+        subscription.min_trip_duration_days = payload.min_trip_duration_days
+        subscription.max_trip_duration_days = payload.max_trip_duration_days
+        subscription.max_price = payload.max_price
+        subscription.currency = payload.currency
+        subscription.market = payload.market
+        subscription.direct_only = payload.direct_only
+        subscription.baggage_policy = payload.baggage_policy
+        subscription.preferred_airlines = payload.preferred_airlines
+        subscription.check_interval_minutes = payload.check_interval_minutes
+        await session.flush()
+        return subscription

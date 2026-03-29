@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
+from app.bot.keyboards.subscriptions import subscription_actions_keyboard
 from app.bot.handlers.subscriptions import _build_help_text, _parse_date_range, _parse_price_input, _render_state_summary
 
 
@@ -52,3 +53,9 @@ def test_render_state_summary_uses_rub_by_default() -> None:
     )
     assert "Валюта: RUB (по умолчанию)" in summary
     assert "Проверка: каждые 60 минут" in summary
+
+
+def test_subscription_actions_keyboard_has_edit_button() -> None:
+    keyboard = subscription_actions_keyboard("sub-id", enabled=True)
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert "Редактировать" in labels

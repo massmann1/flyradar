@@ -32,6 +32,32 @@ class SubscriptionService:
             await session.commit()
             return subscription.id
 
+    async def update_subscription(
+        self,
+        *,
+        telegram_user_id: int,
+        username: str | None,
+        subscription_id: str,
+        payload: SubscriptionCreate,
+    ) -> bool:
+        async with self._session_factory() as session:
+            user = await self._users.get_or_create(
+                session,
+                telegram_user_id=telegram_user_id,
+                username=username,
+                is_admin=telegram_user_id in self._settings.allowed_user_ids,
+            )
+            subscription = await self._subscriptions.get_for_user(session, subscription_id, user.id)
+            if subscription is None:
+                await session.commit()
+                return False
+
+            await self._subscriptions.update(session, subscription=subscription, payload=payload)
+            if subscription.enabled:
+                subscription.next_check_at = datetime.now(timezone.utc) + timedelta(minutes=1)
+            await session.commit()
+            return True
+
     async def list_subscriptions(self, *, telegram_user_id: int, username: str | None) -> list:
         async with self._session_factory() as session:
             user = await self._users.get_or_create(
