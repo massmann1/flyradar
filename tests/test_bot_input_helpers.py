@@ -33,6 +33,8 @@ def test_build_help_text_lists_user_commands() -> None:
     assert "/subscriptions" in help_text
     assert "/help" in help_text
     assert "60 минут" in help_text
+    assert "➕ Новая подписка" in help_text
+    assert "редактировать подписку" in help_text.lower()
 
 
 def test_render_state_summary_uses_rub_by_default() -> None:
