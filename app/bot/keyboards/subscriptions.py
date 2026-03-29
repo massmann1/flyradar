@@ -3,7 +3,12 @@ from __future__ import annotations
 import calendar
 from datetime import date
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+
+MAIN_MENU_NEW = "➕ Новая подписка"
+MAIN_MENU_SUBSCRIPTIONS = "📋 Мои подписки"
+MAIN_MENU_HELP = "ℹ️ Помощь"
+MAIN_MENU_CANCEL = "✖️ Отмена"
 
 _MONTH_NAMES = [
     "Январь",
@@ -30,6 +35,24 @@ def trip_type_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="Туда-обратно", callback_data="new:trip:round_trip"),
             ]
         ]
+    )
+
+
+def main_menu_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [
+                KeyboardButton(text=MAIN_MENU_NEW),
+                KeyboardButton(text=MAIN_MENU_SUBSCRIPTIONS),
+            ],
+            [
+                KeyboardButton(text=MAIN_MENU_HELP),
+                KeyboardButton(text=MAIN_MENU_CANCEL),
+            ],
+        ],
+        resize_keyboard=True,
+        is_persistent=True,
+        input_field_placeholder="Выбери действие или введи ответ на текущий шаг",
     )
 
 
@@ -118,20 +141,6 @@ def calendar_keyboard(*, context: str, year: int, month: int, selected_from: dat
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
-def baggage_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Игнорировать", callback_data="new:baggage:ignore"),
-                InlineKeyboardButton(text="Опционально", callback_data="new:baggage:optional"),
-                InlineKeyboardButton(text="Обязательно", callback_data="new:baggage:required"),
-            ]
-        ]
-    )
-
-
 def confirm_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[

@@ -15,6 +15,11 @@ from app.bot.keyboards.subscriptions import (
     confirm_keyboard,
     date_input_mode_keyboard,
     edit_dates_keyboard,
+    MAIN_MENU_CANCEL,
+    MAIN_MENU_HELP,
+    MAIN_MENU_NEW,
+    MAIN_MENU_SUBSCRIPTIONS,
+    main_menu_keyboard,
     return_mode_keyboard,
     subscription_actions_keyboard,
     trip_type_keyboard,
@@ -39,6 +44,8 @@ def build_subscription_router(
     travelpayouts_client: TravelpayoutsRestClient,
 ) -> Router:
     router = Router()
+
+    menu_keyboard = main_menu_keyboard()
 
     async def ensure_access(message_or_callback: Message | CallbackQuery) -> bool:
         user = message_or_callback.from_user
@@ -71,37 +78,26 @@ def build_subscription_router(
         logger.exception("telegram_handler_failed", exc_info=event.exception)
         update = event.update
         if update.message is not None:
-            await update.message.answer("Что-то пошло не так на этом шаге. Попробуй еще раз или начни заново через /new.")
+            await update.message.answer(
+                "Что-то пошло не так на этом шаге. Попробуй еще раз или начни заново через /new.",
+                reply_markup=menu_keyboard,
+            )
         elif update.callback_query is not None and update.callback_query.message is not None:
             await update.callback_query.message.answer(
-                "Что-то пошло не так на этом шаге. Попробуй еще раз или начни заново через /new."
+                "Что-то пошло не так на этом шаге. Попробуй еще раз или начни заново через /new.",
+                reply_markup=menu_keyboard,
             )
             await update.callback_query.answer()
         return True
 
-    @router.message(Command("start"))
-    async def start_handler(message: Message) -> None:
-        if not await ensure_access(message):
-            return
-        await message.answer(_build_help_text())
+    async def show_help(message: Message) -> None:
+        await message.answer(_build_help_text(), reply_markup=menu_keyboard)
 
-    @router.message(Command("help"))
-    async def help_handler(message: Message) -> None:
-        if not await ensure_access(message):
-            return
-        await message.answer(_build_help_text())
-
-    @router.message(Command("cancel"))
-    async def cancel_handler(message: Message, state: FSMContext) -> None:
-        if not await ensure_access(message):
-            return
+    async def cancel_dialog(message: Message, state: FSMContext) -> None:
         await state.clear()
-        await message.answer("Текущий диалог отменен.")
+        await message.answer("Текущий диалог отменен.", reply_markup=menu_keyboard)
 
-    @router.message(Command("new"))
-    async def new_subscription_handler(message: Message, state: FSMContext) -> None:
-        if not await ensure_access(message):
-            return
+    async def start_new_dialog(message: Message, state: FSMContext) -> None:
         await state.clear()
         await state.update_data(
             currency=settings.travelpayouts_default_currency.upper(),
@@ -110,24 +106,76 @@ def build_subscription_router(
             baggage_policy=BaggagePolicy.IGNORE.value,
         )
         await state.set_state(NewSubscriptionStates.name)
-        await message.answer("Название подписки?")
+        await message.answer("Название подписки?", reply_markup=menu_keyboard)
+
+    async def show_subscriptions_list(message: Message) -> None:
+        subscriptions = await subscription_service.list_subscriptions(
+            telegram_user_id=message.from_user.id,
+            username=message.from_user.username,
+        )
+        if not subscriptions:
+            await message.answer("Подписок пока нет. Создай первую через /new", reply_markup=menu_keyboard)
+            return
+
+        await message.answer("Твои подписки:", reply_markup=menu_keyboard)
+        for subscription in subscriptions:
+            summary = _render_subscription(subscription)
+            await message.answer(summary, reply_markup=subscription_actions_keyboard(subscription.id, subscription.enabled))
+
+    @router.message(Command("start"))
+    async def start_handler(message: Message) -> None:
+        if not await ensure_access(message):
+            return
+        await show_help(message)
+
+    @router.message(Command("help"))
+    async def help_handler(message: Message) -> None:
+        if not await ensure_access(message):
+            return
+        await show_help(message)
+
+    @router.message(Command("cancel"))
+    async def cancel_handler(message: Message, state: FSMContext) -> None:
+        if not await ensure_access(message):
+            return
+        await cancel_dialog(message, state)
+
+    @router.message(Command("new"))
+    async def new_subscription_handler(message: Message, state: FSMContext) -> None:
+        if not await ensure_access(message):
+            return
+        await start_new_dialog(message, state)
 
     @router.message(Command("subscriptions"))
     @router.message(Command("subs"))
     async def subscriptions_handler(message: Message) -> None:
         if not await ensure_access(message):
             return
-        subscriptions = await subscription_service.list_subscriptions(
-            telegram_user_id=message.from_user.id,
-            username=message.from_user.username,
-        )
-        if not subscriptions:
-            await message.answer("Подписок пока нет. Создай первую через /new")
-            return
+        await show_subscriptions_list(message)
 
-        for subscription in subscriptions:
-            summary = _render_subscription(subscription)
-            await message.answer(summary, reply_markup=subscription_actions_keyboard(subscription.id, subscription.enabled))
+    @router.message(F.text == MAIN_MENU_HELP)
+    async def help_button_handler(message: Message) -> None:
+        if not await ensure_access(message):
+            return
+        await show_help(message)
+
+    @router.message(F.text == MAIN_MENU_CANCEL)
+    async def cancel_button_handler(message: Message, state: FSMContext) -> None:
+        if not await ensure_access(message):
+            return
+        await cancel_dialog(message, state)
+
+    @router.message(F.text == MAIN_MENU_NEW)
+    async def new_button_handler(message: Message, state: FSMContext) -> None:
+        if not await ensure_access(message):
+            return
+        await start_new_dialog(message, state)
+
+    @router.message(F.text == MAIN_MENU_SUBSCRIPTIONS)
+    async def subscriptions_button_handler(message: Message) -> None:
+        if not await ensure_access(message):
+            return
+        await show_subscriptions_list(message)
 
     @router.message(NewSubscriptionStates.name)
     async def name_handler(message: Message, state: FSMContext) -> None:
@@ -495,7 +543,8 @@ def build_subscription_router(
         await state.clear()
         await callback.message.answer(
             f"Подписка создана: {subscription_id}\n"
-            "Первая проверка будет запущена автоматически в ближайшую минуту."
+            "Первая проверка будет запущена автоматически в ближайшую минуту.",
+            reply_markup=menu_keyboard,
         )
         await callback.answer()
 
@@ -504,7 +553,7 @@ def build_subscription_router(
         if not await ensure_access(callback):
             return
         await state.clear()
-        await callback.message.answer("Создание подписки отменено.")
+        await callback.message.answer("Создание подписки отменено.", reply_markup=menu_keyboard)
         await callback.answer()
 
     @router.callback_query(F.data.startswith("sub:"))
@@ -528,7 +577,7 @@ def build_subscription_router(
                 subscription_id=subscription_id,
                 enabled=True,
             )
-            await callback.message.answer("Подписка включена.")
+            await callback.message.answer("Подписка включена.", reply_markup=menu_keyboard)
         elif action == "disable":
             await subscription_service.set_enabled(
                 telegram_user_id=callback.from_user.id,
@@ -536,20 +585,21 @@ def build_subscription_router(
                 subscription_id=subscription_id,
                 enabled=False,
             )
-            await callback.message.answer("Подписка выключена.")
+            await callback.message.answer("Подписка выключена.", reply_markup=menu_keyboard)
         elif action == "delete":
             await subscription_service.delete(
                 telegram_user_id=callback.from_user.id,
                 username=callback.from_user.username,
                 subscription_id=subscription_id,
             )
-            await callback.message.answer("Подписка удалена.")
+            await callback.message.answer("Подписка удалена.", reply_markup=menu_keyboard)
         elif action == "check":
-            await callback.message.answer("Запускаю ручную проверку...")
+            await callback.message.answer("Запускаю ручную проверку...", reply_markup=menu_keyboard)
             result = await alert_service.run_subscription_check(subscription_id=subscription_id, trigger=CheckTrigger.MANUAL)
             await callback.message.answer(
                 f"Проверка завершена.\nСтатус: {result.status.value}\n"
-                f"Найдено офферов: {result.offers_found}\nОтправлено уведомлений: {result.notifications_sent}"
+                f"Найдено офферов: {result.offers_found}\nОтправлено уведомлений: {result.notifications_sent}",
+                reply_markup=menu_keyboard,
             )
         elif action == "latest":
             items = await subscription_service.list_recent_offers(
@@ -559,7 +609,7 @@ def build_subscription_router(
                 limit=5,
             )
             if not items:
-                await callback.message.answer("По этой подписке пока нет сохраненных офферов.")
+                await callback.message.answer("По этой подписке пока нет сохраненных офферов.", reply_markup=menu_keyboard)
             else:
                 lines = []
                 for offer, price in items:
@@ -568,7 +618,7 @@ def build_subscription_router(
                         f"{offer.departure_at.date().isoformat() if offer.departure_at else '-'} | "
                         f"{price.price_amount} {price.currency}"
                     )
-                await callback.message.answer("Последние варианты:\n" + "\n".join(lines))
+                await callback.message.answer("Последние варианты:\n" + "\n".join(lines), reply_markup=menu_keyboard)
 
         await callback.answer()
 
