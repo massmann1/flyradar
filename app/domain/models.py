@@ -105,7 +105,7 @@ class OfferPrice(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     price_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
     currency: Mapped[str] = mapped_column(String(3))
-    found_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_found_at: Mapped[datetime | None] = mapped_column("found_at", DateTime(timezone=True))
     api_cache_key: Mapped[str | None] = mapped_column(String(255))
     is_actual: Mapped[bool] = mapped_column(Boolean, default=True)
 

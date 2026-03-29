@@ -159,4 +159,11 @@ make init-env
 
 - The bot is the main UI.
 - FastAPI is a technical layer for health-checks, admin debugging, and future web UI.
+- The service uses cached Travelpayouts / Aviasales Data API, not live search.
+- Offer timestamps reflect cached/provider data or bot observations:
+  - `provider_found_at` means when the offer was found in the provider cache, only if the API actually returns it.
+  - `first_seen_at` means when the bot first saved the offer.
+  - `last_seen_at` means when the bot last saw the offer.
+  - `observed_at` means the time of a concrete price observation by the bot.
+- These timestamps are not purchase timestamps and should not be interpreted as booking or checkout events.
 - Baggage filtering is stored in the subscription but is not enforced against Data API because the cache API does not expose a reliable baggage filter.

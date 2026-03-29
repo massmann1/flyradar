@@ -76,7 +76,7 @@ class OfferRepository:
         subscription_id: str,
         price_amount: Decimal,
         currency: str,
-        found_at: datetime | None,
+        provider_found_at: datetime | None,
         api_cache_key: str | None,
     ) -> OfferPrice:
         latest = await self.get_last_price_for_offer_and_subscription(
@@ -93,7 +93,7 @@ class OfferRepository:
             subscription_id=subscription_id,
             price_amount=price_amount,
             currency=currency,
-            found_at=found_at,
+            provider_found_at=provider_found_at,
             api_cache_key=api_cache_key,
             is_actual=True,
         )

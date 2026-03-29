@@ -55,6 +55,28 @@ def test_normalize_offers_extracts_nested_offers(travelpayouts_client) -> None:
     assert offer.price_amount == 12345
     assert offer.airline_iata == "TK"
     assert offer.deeplink == "/search/mock"
+    assert offer.provider_found_at is None
+
+
+def test_normalize_offers_parses_provider_found_at_when_present(travelpayouts_client) -> None:
+    payload = {
+        "success": True,
+        "currency": "rub",
+        "data": [
+            {
+                "origin": "MOW",
+                "destination": "IST",
+                "departure_at": "2026-05-01T08:00:00+03:00",
+                "price": 12345,
+                "found_at": "2026-04-20T12:34:56+00:00",
+            }
+        ],
+    }
+
+    offers = travelpayouts_client._normalize_offers(payload=payload, endpoint="/aviasales/v3/prices_for_dates")  # noqa: SLF001
+
+    assert len(offers) == 1
+    assert offers[0].provider_found_at == datetime(2026, 4, 20, 12, 34, 56, tzinfo=timezone.utc)
 
 
 def test_normalize_offers_skips_invalid_items(travelpayouts_client) -> None:

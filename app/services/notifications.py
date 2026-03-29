@@ -103,9 +103,10 @@ def format_offer_message(
     previous_price: Decimal | None = None,
     airline_name: str | None = None,
     history_context: PriceHistoryContext | None = None,
+    provider_found_at: datetime | None = None,
 ) -> str:
     parts = [
-        "<b>Найден билет</b>",
+        "<b>Найден оффер</b>",
         f"Подписка: <b>{subscription.name}</b>",
         f"Маршрут: <b>{offer.origin_iata} -> {offer.destination_iata}</b>",
         f"Дата вылета: <b>{_format_trip_date(offer.departure_at)}</b>",
@@ -127,10 +128,15 @@ def format_offer_message(
         parts.append(f"Авиакомпания: <b>{airline_label}</b>")
     if previous_price is not None and previous_price > price_amount:
         parts.append(f"Прошлая отправленная цена: <b>{_format_money(previous_price)} {currency}</b>")
+    if provider_found_at is not None:
+        parts.append(f"Найден в кэше провайдера: <b>{_format_timestamp(provider_found_at)}</b>")
+    parts.append(f"Впервые замечен ботом: <b>{_format_timestamp(offer.first_seen_at)}</b>")
+    parts.append(f"Последнее наблюдение ботом: <b>{_format_timestamp(offer.last_seen_at)}</b>")
     if history_context is not None:
         parts.extend(_render_history_context(history_context=history_context, current_price=price_amount, currency=currency))
     if offer.deeplink_path:
         parts.append(f"Ссылка: https://www.aviasales.com{offer.deeplink_path}")
+    parts.append("Данные кэшированные, цена и наличие могли измениться.")
     return "\n".join(parts)
 
 
@@ -153,6 +159,14 @@ def _format_trip_date(value: datetime | None) -> str:
     if value is None:
         return "-"
     return value.date().strftime("%d.%m.%Y")
+
+
+def _format_timestamp(value: datetime | None) -> str:
+    if value is None:
+        return "-"
+    current = value.astimezone(timezone.utc) if value.tzinfo is not None else value
+    suffix = " UTC" if current.tzinfo is not None else ""
+    return current.strftime("%d.%m.%Y %H:%M") + suffix
 
 
 def _format_money(value: Decimal) -> str:

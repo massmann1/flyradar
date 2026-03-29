@@ -235,7 +235,7 @@ class TravelpayoutsRestClient:
                 currency=currency.upper(),
                 deeplink=item.get("link"),
                 source_endpoint=endpoint,
-                found_at=_parse_dt(item.get("found_at")) or datetime.now(timezone.utc),
+                provider_found_at=_parse_dt(item.get("found_at")),
                 raw_payload=_stored_offer_payload(item, store_raw_payload=self._settings.store_raw_payload),
             )
         except (ValidationError, TypeError, ValueError, ArithmeticError) as exc:

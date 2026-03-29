@@ -105,7 +105,7 @@ class AlertService:
                         subscription_id=subscription.id,
                         price_amount=dto.price_amount,
                         currency=dto.currency,
-                        found_at=dto.found_at,
+                        provider_found_at=dto.provider_found_at,
                         api_cache_key=request_hash,
                     )
                     last_sent = await self._notifications.get_last_sent_for_offer(
@@ -148,6 +148,7 @@ class AlertService:
                         previous_price=last_sent.price_amount if last_sent else None,
                         airline_name=await self._travelpayouts_client.get_airline_name(dto.airline_iata),
                         history_context=history_context,
+                        provider_found_at=dto.provider_found_at,
                     )
                     event = await self._notifications.create(
                         session,

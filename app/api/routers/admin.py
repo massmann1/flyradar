@@ -71,9 +71,12 @@ async def list_subscription_offers(
             "departure_at": offer.departure_at,
             "return_at": offer.return_at,
             "airline_iata": offer.airline_iata,
+            "first_seen_at": offer.first_seen_at,
+            "last_seen_at": offer.last_seen_at,
             "price_amount": price.price_amount,
             "currency": price.currency,
             "observed_at": price.observed_at,
+            "provider_found_at": price.provider_found_at,
         }
         for offer, price in items
     ]

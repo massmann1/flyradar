@@ -124,7 +124,7 @@ class OfferDTO(BaseModel):
     currency: str
     deeplink: str | None = None
     source_endpoint: str
-    found_at: datetime | None = None
+    provider_found_at: datetime | None = None
     raw_payload: dict
 
 
