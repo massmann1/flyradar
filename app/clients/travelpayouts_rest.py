@@ -88,6 +88,7 @@ class TravelpayoutsRestClient:
                 "destination": subscription.destination_iata,
                 "departure_at": subscription.departure_date_from.isoformat(),
                 "return_at": subscription.return_date_from.isoformat(),
+                "one_way": "false",
                 "direct": str(subscription.direct_only).lower(),
                 "currency": subscription.currency,
                 "market": subscription.market,

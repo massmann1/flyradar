@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
 
+from app.domain.enums import TripType
 from app.clients.travelpayouts_rest import _flatten_offer_items, _parse_dt, _stored_offer_payload
 
 
@@ -112,3 +114,26 @@ def test_stored_offer_payload_can_be_compacted() -> None:
         "price": 9900,
         "airline": "TK",
     }
+
+
+def test_build_request_sets_one_way_false_for_fixed_round_trip(travelpayouts_client) -> None:
+    subscription = SimpleNamespace(
+        trip_type=TripType.ROUND_TRIP,
+        origin_iata="KZN",
+        destination_iata="NHA",
+        departure_date_from=date(2026, 6, 1),
+        departure_date_to=date(2026, 6, 1),
+        return_date_from=date(2026, 6, 12),
+        return_date_to=date(2026, 6, 12),
+        min_trip_duration_days=None,
+        max_trip_duration_days=None,
+        direct_only=False,
+        currency="RUB",
+        market="ru",
+    )
+
+    endpoint, params = travelpayouts_client._build_request(subscription)  # noqa: SLF001
+
+    assert endpoint == "/aviasales/v3/prices_for_dates"
+    assert params["return_at"] == "2026-06-12"
+    assert params["one_way"] == "false"
