@@ -231,8 +231,9 @@ def build_subscription_router(
             await state.update_data(destination_iata=normalized)
         await state.set_state(NewSubscriptionStates.trip_type)
         data = await state.get_data()
+        current_trip_type = _render_trip_type(data["trip_type"]) if data.get("trip_type") else None
         await message.answer(
-            _prompt_with_current_choice("Тип поездки?", _render_trip_type(data["trip_type"]), editing=_is_editing(data)),
+            _prompt_with_current_choice("Тип поездки?", current_trip_type, editing=_is_editing(data)),
             reply_markup=trip_type_keyboard(include_keep=_is_editing(data)),
         )
 
