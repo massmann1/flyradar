@@ -244,9 +244,21 @@ class AlertService:
         cached = await self._cache.get_valid(session, cache_key=request_hash, now=now)
         if cached is not None:
             offers = self._travelpayouts_client._normalize_offers(payload=cached.response_json, endpoint=offers_endpoint)  # noqa: SLF001
+            if self._travelpayouts_client.should_retry_round_trip_with_grouped_prices(
+                subscription,
+                endpoint=offers_endpoint,
+                offers=offers,
+            ):
+                return await self._get_round_trip_grouped_fallback(session, subscription, now=now)
             return offers, offers_endpoint, request_hash, cached.response_json
 
         offers, endpoint, cache_key, payload = await self._travelpayouts_client.search_subscription(subscription)
+        if self._travelpayouts_client.should_retry_round_trip_with_grouped_prices(
+            subscription,
+            endpoint=endpoint,
+            offers=offers,
+        ):
+            return await self._get_round_trip_grouped_fallback(session, subscription, now=now)
         await self._cache.upsert(
             session,
             cache_key=cache_key,
@@ -258,6 +270,31 @@ class AlertService:
             http_status=200,
         )
         return offers, endpoint, cache_key, payload
+
+    async def _get_round_trip_grouped_fallback(self, session, subscription, *, now: datetime):
+        fallback_endpoint, fallback_params = self._travelpayouts_client.build_round_trip_grouped_fallback_request(subscription)
+        fallback_hash = self._travelpayouts_client.make_cache_key(fallback_endpoint, fallback_params)
+        cached_fallback = await self._cache.get_valid(session, cache_key=fallback_hash, now=now)
+        if cached_fallback is not None:
+            fallback_offers = self._travelpayouts_client._normalize_offers(  # noqa: SLF001
+                payload=cached_fallback.response_json,
+                endpoint=fallback_endpoint,
+            )
+            return fallback_offers, fallback_endpoint, fallback_hash, cached_fallback.response_json
+
+        fallback_payload = await self._travelpayouts_client._request(fallback_endpoint, fallback_params)  # noqa: SLF001
+        fallback_offers = self._travelpayouts_client._normalize_offers(payload=fallback_payload, endpoint=fallback_endpoint)  # noqa: SLF001
+        await self._cache.upsert(
+            session,
+            cache_key=fallback_hash,
+            endpoint=fallback_endpoint,
+            normalized_params=fallback_params,
+            response_json=fallback_payload,
+            fetched_at=now,
+            expires_at=now + timedelta(seconds=self._settings.search_cache_ttl_seconds),
+            http_status=200,
+        )
+        return fallback_offers, fallback_endpoint, fallback_hash, fallback_payload
 
     @staticmethod
     def _offer_matches_subscription(subscription, offer) -> bool:

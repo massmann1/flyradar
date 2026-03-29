@@ -59,6 +59,36 @@ class TravelpayoutsRestClient:
         normalized = "&".join(f"{key}={params[key]}" for key in sorted(params))
         return hashlib.sha256(f"{endpoint}:{normalized}".encode("utf-8")).hexdigest()
 
+    def should_retry_round_trip_with_grouped_prices(
+        self,
+        subscription: Subscription,
+        *,
+        endpoint: str,
+        offers: list[OfferDTO],
+    ) -> bool:
+        departure_exact = subscription.departure_date_to is None or subscription.departure_date_to == subscription.departure_date_from
+        has_fixed_return = subscription.return_date_from and (
+            subscription.return_date_to is None or subscription.return_date_to == subscription.return_date_from
+        )
+        if subscription.trip_type != TripType.ROUND_TRIP or endpoint != "/aviasales/v3/prices_for_dates":
+            return False
+        if not departure_exact or not has_fixed_return:
+            return False
+        return not any(offer.return_at is not None for offer in offers)
+
+    def build_round_trip_grouped_fallback_request(self, subscription: Subscription) -> tuple[str, dict]:
+        return "/aviasales/v3/grouped_prices", {
+            "origin": subscription.origin_iata,
+            "destination": subscription.destination_iata,
+            "group_by": "departure_at",
+            "departure_at": subscription.departure_date_from.isoformat(),
+            "return_at": subscription.return_date_from.isoformat(),
+            "direct": str(subscription.direct_only).lower(),
+            "currency": subscription.currency,
+            "market": subscription.market,
+            "token": self._settings.travelpayouts_api_token,
+        }
+
     def _build_request(self, subscription: Subscription) -> tuple[str, dict]:
         departure_exact = subscription.departure_date_to is None or subscription.departure_date_to == subscription.departure_date_from
         has_fixed_return = subscription.return_date_from and (

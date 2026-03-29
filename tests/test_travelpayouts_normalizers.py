@@ -137,3 +137,57 @@ def test_build_request_sets_one_way_false_for_fixed_round_trip(travelpayouts_cli
     assert endpoint == "/aviasales/v3/prices_for_dates"
     assert params["return_at"] == "2026-06-12"
     assert params["one_way"] == "false"
+
+
+def test_should_retry_round_trip_with_grouped_prices_when_prices_for_dates_has_no_return(
+    travelpayouts_client,
+) -> None:
+    subscription = SimpleNamespace(
+        trip_type=TripType.ROUND_TRIP,
+        origin_iata="KZN",
+        destination_iata="MRV",
+        departure_date_from=date(2026, 6, 1),
+        departure_date_to=date(2026, 6, 1),
+        return_date_from=date(2026, 6, 3),
+        return_date_to=date(2026, 6, 3),
+        min_trip_duration_days=None,
+        max_trip_duration_days=None,
+        direct_only=False,
+        currency="RUB",
+        market="ru",
+    )
+    offers = [
+        SimpleNamespace(return_at=None),
+        SimpleNamespace(return_at=None),
+    ]
+
+    should_retry = travelpayouts_client.should_retry_round_trip_with_grouped_prices(
+        subscription,
+        endpoint="/aviasales/v3/prices_for_dates",
+        offers=offers,
+    )
+
+    assert should_retry is True
+
+
+def test_build_round_trip_grouped_fallback_request_uses_exact_dates(travelpayouts_client) -> None:
+    subscription = SimpleNamespace(
+        trip_type=TripType.ROUND_TRIP,
+        origin_iata="KZN",
+        destination_iata="MRV",
+        departure_date_from=date(2026, 6, 1),
+        departure_date_to=date(2026, 6, 1),
+        return_date_from=date(2026, 6, 3),
+        return_date_to=date(2026, 6, 3),
+        min_trip_duration_days=None,
+        max_trip_duration_days=None,
+        direct_only=False,
+        currency="RUB",
+        market="ru",
+    )
+
+    endpoint, params = travelpayouts_client.build_round_trip_grouped_fallback_request(subscription)
+
+    assert endpoint == "/aviasales/v3/grouped_prices"
+    assert params["departure_at"] == "2026-06-01"
+    assert params["return_at"] == "2026-06-03"
