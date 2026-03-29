@@ -20,6 +20,7 @@ from app.bot.keyboards.subscriptions import (
     MAIN_MENU_NEW,
     MAIN_MENU_SUBSCRIPTIONS,
     main_menu_keyboard,
+    place_suggestions_keyboard,
     return_mode_keyboard,
     subscription_actions_keyboard,
     trip_type_keyboard,
@@ -207,10 +208,18 @@ def build_subscription_router(
         if _is_keep_value(message.text) and _is_editing(data):
             normalized = data.get("origin_iata")
         else:
-            normalized = await _resolve_airport_or_city_code(message.text, travelpayouts_client)
-            if normalized is None:
-                await message.answer("Не смог распознать origin. Попробуй IATA-код или более точное название.")
+            suggestions = await _resolve_airport_or_city_options(message.text, travelpayouts_client)
+            if not suggestions:
+                await message.answer("Не смог распознать город вылета. Попробуй IATA-код или более точное название.")
                 return
+            if len(suggestions) > 1:
+                await state.update_data(origin_suggestions=suggestions)
+                await message.answer(
+                    f"Нашел несколько вариантов для <b>{message.text.strip()}</b>.\nВыбери нужный ниже или отправь более точное название.",
+                    reply_markup=place_suggestions_keyboard("origin", suggestions),
+                )
+                return
+            normalized = suggestions[0]["code"]
             await state.update_data(origin_iata=normalized)
         await state.set_state(NewSubscriptionStates.destination)
         data = await state.get_data()
@@ -224,10 +233,18 @@ def build_subscription_router(
         if _is_keep_value(message.text) and _is_editing(data):
             normalized = data.get("destination_iata")
         else:
-            normalized = await _resolve_airport_or_city_code(message.text, travelpayouts_client)
-            if normalized is None:
-                await message.answer("Не смог распознать destination. Попробуй IATA-код или более точное название.")
+            suggestions = await _resolve_airport_or_city_options(message.text, travelpayouts_client)
+            if not suggestions:
+                await message.answer("Не смог распознать город прилета. Попробуй IATA-код или более точное название.")
                 return
+            if len(suggestions) > 1:
+                await state.update_data(destination_suggestions=suggestions)
+                await message.answer(
+                    f"Нашел несколько вариантов для <b>{message.text.strip()}</b>.\nВыбери нужный ниже или отправь более точное название.",
+                    reply_markup=place_suggestions_keyboard("destination", suggestions),
+                )
+                return
+            normalized = suggestions[0]["code"]
             await state.update_data(destination_iata=normalized)
         await state.set_state(NewSubscriptionStates.trip_type)
         data = await state.get_data()
@@ -235,6 +252,74 @@ def build_subscription_router(
         await message.answer(
             _prompt_with_current_choice("Тип поездки?", current_trip_type, editing=_is_editing(data)),
             reply_markup=trip_type_keyboard(include_keep=_is_editing(data)),
+        )
+
+    @router.callback_query(F.data.startswith("new:place:"))
+    async def place_suggestion_handler(callback: CallbackQuery, state: FSMContext) -> None:
+        if not await ensure_access(callback):
+            return
+        parts = (callback.data or "").split(":")
+        if len(parts) < 4:
+            await callback.answer()
+            return
+
+        _, _, field, action, *tail = parts
+        if field not in {"origin", "destination"}:
+            await callback.answer()
+            return
+
+        current_state = await state.get_state()
+        expected_state = NewSubscriptionStates.origin.state if field == "origin" else NewSubscriptionStates.destination.state
+        if current_state != expected_state:
+            await callback.answer("Эта подсказка уже устарела.", show_alert=False)
+            return
+
+        if action == "retry":
+            prompt = "Откуда? Отправь IATA-код или название города." if field == "origin" else "Куда? Отправь IATA-код или название города."
+            data = await state.get_data()
+            await callback.message.answer(
+                _prompt_with_current_text(
+                    prompt,
+                    data.get(f"{field}_iata"),
+                    editing=_is_editing(data),
+                )
+            )
+            await callback.answer()
+            return
+
+        if action != "choose" or not tail:
+            await callback.answer()
+            return
+
+        selected_code = tail[0].upper()
+        data = await state.get_data()
+        suggestions = data.get(f"{field}_suggestions") or []
+        allowed_codes = {item.get("code") for item in suggestions}
+        if selected_code not in allowed_codes:
+            await callback.answer("Эта подсказка уже устарела. Отправь город заново.", show_alert=False)
+            return
+
+        await state.update_data(**{f"{field}_iata": selected_code, f"{field}_suggestions": None})
+        await callback.answer(f"Выбрано: {selected_code}")
+
+        if field == "origin":
+            await state.set_state(NewSubscriptionStates.destination)
+            refreshed = await state.get_data()
+            await callback.message.answer(
+                _prompt_with_current_text(
+                    "Куда? Отправь IATA-код или название города.",
+                    refreshed.get("destination_iata"),
+                    editing=_is_editing(refreshed),
+                )
+            )
+            return
+
+        await state.set_state(NewSubscriptionStates.trip_type)
+        refreshed = await state.get_data()
+        current_trip_type = _render_trip_type(refreshed["trip_type"]) if refreshed.get("trip_type") else None
+        await callback.message.answer(
+            _prompt_with_current_choice("Тип поездки?", current_trip_type, editing=_is_editing(refreshed)),
+            reply_markup=trip_type_keyboard(include_keep=_is_editing(refreshed)),
         )
 
     @router.callback_query(NewSubscriptionStates.trip_type, F.data.startswith("new:trip:"))
@@ -742,16 +827,45 @@ def _render_subscription(subscription) -> str:
     )
 
 
-async def _resolve_airport_or_city_code(raw_text: str, client: TravelpayoutsRestClient) -> str | None:
-    text = raw_text.strip().upper()
-    if len(text) == 3 and text.isalpha():
-        return text
-    options = await client.autocomplete_places(raw_text.strip())
-    for option in options[:5]:
-        code = option.get("code")
-        if code and len(code) == 3:
-            return code.upper()
-    return None
+async def _resolve_airport_or_city_options(raw_text: str, client: TravelpayoutsRestClient) -> list[dict[str, str]]:
+    text = raw_text.strip()
+    upper = text.upper()
+    if len(upper) == 3 and upper.isalpha():
+        return [{"code": upper, "label": f"{upper}"}]
+    options = await client.autocomplete_places(text)
+    return _normalize_place_suggestions(options)
+
+
+def _normalize_place_suggestions(options: list[dict]) -> list[dict[str, str]]:
+    suggestions: list[dict[str, str]] = []
+    seen_codes: set[str] = set()
+    for option in options:
+        code = str(option.get("code") or "").strip().upper()
+        if len(code) != 3 or code in seen_codes:
+            continue
+        suggestions.append({"code": code, "label": _format_place_option(option, code)})
+        seen_codes.add(code)
+        if len(suggestions) >= 5:
+            break
+    return suggestions
+
+
+def _format_place_option(option: dict, code: str | None = None) -> str:
+    normalized_code = (code or option.get("code") or "").strip().upper()
+    city_name = str(option.get("city_name") or option.get("cityName") or "").strip()
+    place_name = str(option.get("name") or "").strip()
+    country_name = str(option.get("country_name") or option.get("countryName") or "").strip()
+    place_type = str(option.get("type") or "").strip().lower()
+
+    if place_type == "airport" and city_name and place_name and city_name.casefold() != place_name.casefold():
+        main_label = f"{city_name} — {place_name}"
+    else:
+        main_label = place_name or city_name or normalized_code
+
+    if country_name and country_name.casefold() not in main_label.casefold():
+        main_label = f"{main_label}, {country_name}"
+
+    return f"{main_label} ({normalized_code})" if normalized_code else main_label
 
 
 def _parse_date_range(value: str) -> tuple[date, date | None]:
@@ -891,6 +1005,7 @@ def _build_help_text() -> str:
         "• удалять подписку\n\n"
         "<b>Подсказки</b>\n"
         "• Город можно вводить названием или IATA-кодом, например <code>MOW</code>, <code>BKK</code>, <code>NHA</code>\n"
+        "• Если название неоднозначное или с опечаткой, бот покажет несколько вариантов на выбор\n"
         "• Максимальную цену можно писать как <code>45000</code>, <code>45 000</code> или просто <code>45</code> для 45 000 ₽\n"
         "• Валюта в боте фиксирована: <b>RUB</b>\n"
         "• Проверка выполняется автоматически каждые <b>60 минут</b>\n"

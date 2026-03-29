@@ -3,8 +3,15 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal
 
-from app.bot.keyboards.subscriptions import subscription_actions_keyboard
-from app.bot.handlers.subscriptions import _build_help_text, _parse_date_range, _parse_price_input, _render_state_summary
+from app.bot.keyboards.subscriptions import place_suggestions_keyboard, subscription_actions_keyboard
+from app.bot.handlers.subscriptions import (
+    _build_help_text,
+    _format_place_option,
+    _normalize_place_suggestions,
+    _parse_date_range,
+    _parse_price_input,
+    _render_state_summary,
+)
 
 
 def test_parse_date_range_supports_russian_format() -> None:
@@ -61,3 +68,36 @@ def test_subscription_actions_keyboard_has_edit_button() -> None:
     keyboard = subscription_actions_keyboard("sub-id", enabled=True)
     labels = [button.text for row in keyboard.inline_keyboard for button in row]
     assert "Редактировать" in labels
+
+
+def test_normalize_place_suggestions_deduplicates_codes_and_limits_to_five() -> None:
+    options = [
+        {"code": "NHA", "name": "Cam Ranh", "city_name": "Нячанг", "country_name": "Вьетнам", "type": "airport"},
+        {"code": "NHA", "name": "Nha Trang", "city_name": "Нячанг", "country_name": "Вьетнам", "type": "city"},
+        {"code": "SGN", "name": "Хошимин", "country_name": "Вьетнам", "type": "city"},
+        {"code": "BKK", "name": "Бангкок", "country_name": "Таиланд", "type": "city"},
+        {"code": "HKT", "name": "Пхукет", "country_name": "Таиланд", "type": "city"},
+        {"code": "DME", "name": "Домодедово", "city_name": "Москва", "country_name": "Россия", "type": "airport"},
+        {"code": "SVO", "name": "Шереметьево", "city_name": "Москва", "country_name": "Россия", "type": "airport"},
+    ]
+
+    suggestions = _normalize_place_suggestions(options)
+
+    assert len(suggestions) == 5
+    assert suggestions[0]["code"] == "NHA"
+    assert suggestions[0]["label"] == "Нячанг — Cam Ranh, Вьетнам (NHA)"
+    assert [item["code"] for item in suggestions].count("NHA") == 1
+
+
+def test_format_place_option_uses_city_airport_country_label() -> None:
+    label = _format_place_option(
+        {"code": "DME", "name": "Домодедово", "city_name": "Москва", "country_name": "Россия", "type": "airport"}
+    )
+    assert label == "Москва — Домодедово, Россия (DME)"
+
+
+def test_place_suggestions_keyboard_has_retry_button() -> None:
+    keyboard = place_suggestions_keyboard("origin", [{"code": "NHA", "label": "Нячанг, Вьетнам (NHA)"}])
+    labels = [button.text for row in keyboard.inline_keyboard for button in row]
+    assert "Нячанг, Вьетнам (NHA)" in labels
+    assert "Ввести по-другому" in labels

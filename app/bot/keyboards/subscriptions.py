@@ -99,6 +99,20 @@ def edit_dates_keyboard(*contexts: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
+def place_suggestions_keyboard(field: str, suggestions: list[dict[str, str]]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=item["label"],
+                callback_data=f"new:place:{field}:choose:{item['code']}",
+            )
+        ]
+        for item in suggestions
+    ]
+    rows.append([InlineKeyboardButton(text="Ввести по-другому", callback_data=f"new:place:{field}:retry")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
 def yes_no_keyboard(prefix: str, *, include_keep: bool = False) -> InlineKeyboardMarkup:
     rows = [[
         InlineKeyboardButton(text="Да", callback_data=f"{prefix}:yes"),
