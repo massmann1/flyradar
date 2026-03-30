@@ -5,7 +5,9 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 from app.domain.enums import NotificationReason, TripType
+from app.domain.schemas import NotificationDTO
 from app.services.alerts import AlertService
+from app.services.alerts import _pick_cheapest_notification_candidate
 from app.services.dedupe import choose_notification_reason
 
 
@@ -115,3 +117,44 @@ def test_round_trip_offer_with_expected_return_is_accepted() -> None:
     )
 
     assert AlertService._offer_matches_subscription(subscription, offer) is True  # noqa: SLF001
+
+
+def test_pick_cheapest_notification_candidate_returns_lowest_price() -> None:
+    candidates = [
+        NotificationDTO(
+            subscription_id="sub-1",
+            offer_id=1,
+            dedupe_key="a",
+            reason=NotificationReason.PRICE_BELOW_THRESHOLD,
+            price_amount=Decimal("12912"),
+            currency="RUB",
+            chat_id=1,
+            message_text="a",
+        ),
+        NotificationDTO(
+            subscription_id="sub-1",
+            offer_id=2,
+            dedupe_key="b",
+            reason=NotificationReason.PRICE_BELOW_THRESHOLD,
+            price_amount=Decimal("12522"),
+            currency="RUB",
+            chat_id=1,
+            message_text="b",
+        ),
+        NotificationDTO(
+            subscription_id="sub-1",
+            offer_id=3,
+            dedupe_key="c",
+            reason=NotificationReason.PRICE_BELOW_THRESHOLD,
+            price_amount=Decimal("12700"),
+            currency="RUB",
+            chat_id=1,
+            message_text="c",
+        ),
+    ]
+
+    selected = _pick_cheapest_notification_candidate(candidates)
+
+    assert selected is not None
+    assert selected.offer_id == 2
+    assert selected.price_amount == Decimal("12522")

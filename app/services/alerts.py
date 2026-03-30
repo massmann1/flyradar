@@ -77,7 +77,7 @@ class AlertService:
                     return CheckResult(subscription_id=subscription_id, status=CheckStatus.FAILED, error_message="Subscription missing")
 
                 offers, endpoint, request_hash, payload = await self._get_cached_or_fetch(session, subscription)
-                pending_notification_ids: list[int] = []
+                pending_notifications: list[NotificationDTO] = []
                 filtered_offers = sorted(
                     [offer for offer in offers if self._offer_matches_subscription(subscription, offer)],
                     key=lambda item: item.price_amount,
@@ -183,8 +183,7 @@ class AlertService:
                         history_context=history_context,
                         provider_found_at=dto.provider_found_at,
                     )
-                    event = await self._notifications.create(
-                        session,
+                    pending_notifications.append(
                         NotificationDTO(
                             subscription_id=subscription.id,
                             offer_id=offer.id,
@@ -194,8 +193,13 @@ class AlertService:
                             currency=dto.currency,
                             chat_id=subscription.user.telegram_user_id,
                             message_text=message_text,
-                        ),
+                        )
                     )
+
+                chosen_notification = _pick_cheapest_notification_candidate(pending_notifications)
+                pending_notification_ids: list[int] = []
+                if chosen_notification is not None:
+                    event = await self._notifications.create(session, chosen_notification)
                     pending_notification_ids.append(event.id)
 
                 finished_at = datetime.now(timezone.utc)
@@ -371,3 +375,9 @@ class AlertService:
             if offer.airline_iata.upper() not in subscription.preferred_airlines:
                 return False
         return True
+
+
+def _pick_cheapest_notification_candidate(candidates: list[NotificationDTO]) -> NotificationDTO | None:
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: item.price_amount)
