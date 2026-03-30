@@ -82,9 +82,42 @@ class AlertService:
                     [offer for offer in offers if self._offer_matches_subscription(subscription, offer)],
                     key=lambda item: item.price_amount,
                 )
+                logger.info(
+                    "subscription_check_filter_summary",
+                    extra={
+                        "subscription_id": subscription.id,
+                        "endpoint": endpoint,
+                        "trip_type": subscription.trip_type.value,
+                        "raw_offers_count": len(offers),
+                        "filtered_offers_count": len(filtered_offers),
+                        "direct_only": subscription.direct_only,
+                        "max_price": str(subscription.max_price) if subscription.max_price is not None else None,
+                        "has_return_date_filter": subscription.return_date_from is not None,
+                        "has_duration_filter": subscription.min_trip_duration_days is not None,
+                    },
+                )
 
                 if not filtered_offers:
                     finished_at = datetime.now(timezone.utc)
+                    if offers:
+                        logger.info(
+                            "subscription_check_no_results_after_filters",
+                            extra={
+                                "subscription_id": subscription.id,
+                                "endpoint": endpoint,
+                                "sample_offers": [
+                                    {
+                                        "price": str(offer.price_amount),
+                                        "departure_at": offer.departure_at.isoformat() if offer.departure_at else None,
+                                        "return_at": offer.return_at.isoformat() if offer.return_at else None,
+                                        "transfers": offer.transfers,
+                                        "return_transfers": offer.return_transfers,
+                                        "airline_iata": offer.airline_iata,
+                                    }
+                                    for offer in offers[:3]
+                                ],
+                            },
+                        )
                     if check is not None:
                         check.status = CheckStatus.NO_RESULTS
                         check.endpoint_used = endpoint
