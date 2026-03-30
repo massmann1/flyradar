@@ -191,3 +191,73 @@ def test_build_round_trip_grouped_fallback_request_uses_exact_dates(travelpayout
     assert endpoint == "/aviasales/v3/grouped_prices"
     assert params["departure_at"] == "2026-06-01"
     assert params["return_at"] == "2026-06-03"
+
+
+def test_build_request_sets_return_range_for_round_trip_grouped_prices(travelpayouts_client) -> None:
+    subscription = SimpleNamespace(
+        trip_type=TripType.ROUND_TRIP,
+        origin_iata="KZN",
+        destination_iata="MRV",
+        departure_date_from=date(2026, 6, 1),
+        departure_date_to=date(2026, 6, 3),
+        return_date_from=date(2026, 6, 5),
+        return_date_to=date(2026, 6, 7),
+        min_trip_duration_days=None,
+        max_trip_duration_days=None,
+        direct_only=False,
+        currency="RUB",
+        market="ru",
+    )
+
+    endpoint, params = travelpayouts_client._build_request(subscription)  # noqa: SLF001
+
+    assert endpoint == "/aviasales/v3/grouped_prices"
+    assert params["departure_at"] == "2026-06-01"
+    assert params["return_at"] == "2026-06-05"
+
+
+def test_build_cache_request_uses_batch_for_small_round_trip_ranges(travelpayouts_client) -> None:
+    subscription = SimpleNamespace(
+        trip_type=TripType.ROUND_TRIP,
+        origin_iata="KZN",
+        destination_iata="MRV",
+        departure_date_from=date(2026, 6, 1),
+        departure_date_to=date(2026, 6, 3),
+        return_date_from=date(2026, 6, 5),
+        return_date_to=date(2026, 6, 7),
+        min_trip_duration_days=None,
+        max_trip_duration_days=None,
+        direct_only=False,
+        currency="RUB",
+        market="ru",
+    )
+
+    endpoint, params = travelpayouts_client.build_cache_request(subscription)
+
+    assert endpoint == "/aviasales/v3/prices_for_dates_batch"
+    assert params["departure_dates"] == "2026-06-01,2026-06-02,2026-06-03"
+    assert params["return_dates"] == "2026-06-05,2026-06-06,2026-06-07"
+    assert params["one_way"] == "false"
+
+
+def test_build_cache_request_uses_batch_for_one_way_ranges(travelpayouts_client) -> None:
+    subscription = SimpleNamespace(
+        trip_type=TripType.ONE_WAY,
+        origin_iata="KZN",
+        destination_iata="LED",
+        departure_date_from=date(2026, 6, 1),
+        departure_date_to=date(2026, 6, 3),
+        return_date_from=None,
+        return_date_to=None,
+        min_trip_duration_days=None,
+        max_trip_duration_days=None,
+        direct_only=False,
+        currency="RUB",
+        market="ru",
+    )
+
+    endpoint, params = travelpayouts_client.build_cache_request(subscription)
+
+    assert endpoint == "/aviasales/v3/prices_for_dates_batch"
+    assert params["departure_dates"] == "2026-06-01,2026-06-02,2026-06-03"
+    assert params["one_way"] == "true"

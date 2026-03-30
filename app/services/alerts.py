@@ -271,7 +271,7 @@ class AlertService:
         return result
 
     async def _get_cached_or_fetch(self, session, subscription):
-        offers_endpoint, params = self._travelpayouts_client._build_request(subscription)  # noqa: SLF001
+        offers_endpoint, params = self._travelpayouts_client.build_cache_request(subscription)
         request_hash = self._travelpayouts_client.make_cache_key(offers_endpoint, params)
         now = datetime.now(timezone.utc)
         cached = await self._cache.get_valid(session, cache_key=request_hash, now=now)

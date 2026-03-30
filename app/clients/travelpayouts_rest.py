@@ -5,6 +5,7 @@ import hashlib
 import logging
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
+from itertools import product
 
 import httpx
 from pydantic import ValidationError
@@ -39,7 +40,13 @@ class TravelpayoutsRestClient:
         return payload if isinstance(payload, list) else []
 
     async def search_subscription(self, subscription: Subscription) -> tuple[list[OfferDTO], str, str, dict]:
-        endpoint, params = self._build_request(subscription)
+        endpoint, params = self.build_cache_request(subscription)
+        if endpoint == "/aviasales/v3/prices_for_dates_batch":
+            payload = await self._request_date_range_batch(subscription)
+            offers = self._normalize_offers(payload=payload, endpoint=endpoint)
+            request_hash = self.make_cache_key(endpoint, params)
+            return _dedupe_offers(offers), endpoint, request_hash, payload
+
         payload = await self._request(endpoint, params)
         offers = self._normalize_offers(payload=payload, endpoint=endpoint)
         request_hash = self.make_cache_key(endpoint, params)
@@ -58,6 +65,11 @@ class TravelpayoutsRestClient:
     def make_cache_key(self, endpoint: str, params: dict) -> str:
         normalized = "&".join(f"{key}={params[key]}" for key in sorted(params))
         return hashlib.sha256(f"{endpoint}:{normalized}".encode("utf-8")).hexdigest()
+
+    def build_cache_request(self, subscription: Subscription) -> tuple[str, dict]:
+        if self._should_expand_date_ranges(subscription):
+            return self._build_date_range_batch_request(subscription)
+        return self._build_request(subscription)
 
     def should_retry_round_trip_with_grouped_prices(
         self,
@@ -88,6 +100,16 @@ class TravelpayoutsRestClient:
             "market": subscription.market,
             "token": self._settings.travelpayouts_api_token,
         }
+
+    async def _request_date_range_batch(self, subscription: Subscription) -> dict:
+        queries = self._build_exact_date_queries(subscription)
+        items: list[dict] = []
+        currency = subscription.currency
+        for endpoint, params in queries:
+            payload = await self._request(endpoint, params)
+            currency = str(payload.get("currency") or currency).upper()
+            items.extend(_flatten_offer_items(payload.get("data")))
+        return {"success": True, "currency": currency, "data": items}
 
     def _build_request(self, subscription: Subscription) -> tuple[str, dict]:
         departure_exact = subscription.departure_date_to is None or subscription.departure_date_to == subscription.departure_date_from
@@ -140,13 +162,104 @@ class TravelpayoutsRestClient:
             "token": self._settings.travelpayouts_api_token,
         }
         if subscription.trip_type == TripType.ROUND_TRIP:
-            if subscription.return_date_from and subscription.return_date_to and subscription.return_date_from == subscription.return_date_to:
-                params["return_at"] = subscription.return_date_from.isoformat()
+            if subscription.return_date_from:
+                params["return_at"] = _format_grouped_date(subscription.return_date_from, subscription.return_date_to)
             if subscription.min_trip_duration_days:
                 params["min_trip_duration"] = subscription.min_trip_duration_days
             if subscription.max_trip_duration_days:
                 params["max_trip_duration"] = subscription.max_trip_duration_days
         return endpoint, params
+
+    def _should_expand_date_ranges(self, subscription: Subscription) -> bool:
+        departure_exact = subscription.departure_date_to is None or subscription.departure_date_to == subscription.departure_date_from
+        return_exact = subscription.return_date_to is None or subscription.return_date_to == subscription.return_date_from
+
+        if subscription.trip_type == TripType.ONE_WAY:
+            return not departure_exact
+
+        if subscription.return_date_from is None:
+            return False
+
+        if departure_exact and return_exact:
+            return False
+
+        total_queries = len(self._enumerate_departure_dates(subscription))
+        total_queries *= max(1, len(self._enumerate_return_dates(subscription)))
+        return total_queries <= 21
+
+    def _build_date_range_batch_request(self, subscription: Subscription) -> tuple[str, dict]:
+        departure_dates = ",".join(day.isoformat() for day in self._enumerate_departure_dates(subscription))
+        return_dates = ",".join(day.isoformat() for day in self._enumerate_return_dates(subscription))
+        params = {
+            "origin": subscription.origin_iata,
+            "destination": subscription.destination_iata,
+            "departure_dates": departure_dates,
+            "direct": str(subscription.direct_only).lower(),
+            "currency": subscription.currency,
+            "market": subscription.market,
+        }
+        if subscription.trip_type == TripType.ROUND_TRIP:
+            params["return_dates"] = return_dates
+            params["one_way"] = "false"
+        else:
+            params["one_way"] = "true"
+        return "/aviasales/v3/prices_for_dates_batch", params
+
+    def _build_exact_date_queries(self, subscription: Subscription) -> list[tuple[str, dict]]:
+        departure_dates = self._enumerate_departure_dates(subscription)
+        if subscription.trip_type == TripType.ONE_WAY:
+            return [
+                (
+                    "/aviasales/v3/prices_for_dates",
+                    {
+                        "origin": subscription.origin_iata,
+                        "destination": subscription.destination_iata,
+                        "departure_at": departure_date.isoformat(),
+                        "one_way": "true",
+                        "direct": str(subscription.direct_only).lower(),
+                        "currency": subscription.currency,
+                        "market": subscription.market,
+                        "limit": 30,
+                        "page": 1,
+                        "token": self._settings.travelpayouts_api_token,
+                    },
+                )
+                for departure_date in departure_dates
+            ]
+
+        queries: list[tuple[str, dict]] = []
+        for departure_date, return_date in product(departure_dates, self._enumerate_return_dates(subscription)):
+            if return_date < departure_date:
+                continue
+            queries.append(
+                (
+                    "/aviasales/v3/prices_for_dates",
+                    {
+                        "origin": subscription.origin_iata,
+                        "destination": subscription.destination_iata,
+                        "departure_at": departure_date.isoformat(),
+                        "return_at": return_date.isoformat(),
+                        "one_way": "false",
+                        "direct": str(subscription.direct_only).lower(),
+                        "currency": subscription.currency,
+                        "market": subscription.market,
+                        "limit": 30,
+                        "page": 1,
+                        "token": self._settings.travelpayouts_api_token,
+                    },
+                )
+            )
+        return queries
+
+    @staticmethod
+    def _enumerate_departure_dates(subscription: Subscription) -> list[date]:
+        return _enumerate_dates(subscription.departure_date_from, subscription.departure_date_to)
+
+    @staticmethod
+    def _enumerate_return_dates(subscription: Subscription) -> list[date]:
+        if subscription.return_date_from is None:
+            return []
+        return _enumerate_dates(subscription.return_date_from, subscription.return_date_to)
 
     async def _request(self, endpoint: str, params: dict) -> dict:
         last_error: Exception | None = None
@@ -280,6 +393,24 @@ def _format_grouped_date(date_from: date, date_to: date | None) -> str:
     if date_from.day == 1 and date_to.day >= 28 and date_from.month == date_to.month and date_from.year == date_to.year:
         return date_from.strftime("%Y-%m")
     return date_from.isoformat()
+
+
+def _enumerate_dates(date_from: date, date_to: date | None) -> list[date]:
+    end_date = date_to or date_from
+    current = date_from
+    days: list[date] = []
+    while current <= end_date:
+        days.append(current)
+        current += timedelta(days=1)
+    return days
+
+
+def _dedupe_offers(offers: list[OfferDTO]) -> list[OfferDTO]:
+    unique: dict[str, OfferDTO] = {}
+    for offer in offers:
+        if offer.exact_offer_key not in unique:
+            unique[offer.exact_offer_key] = offer
+    return list(unique.values())
 
 
 def _parse_dt(value: str | None) -> datetime | None:
