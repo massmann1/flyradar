@@ -33,18 +33,22 @@ def choose_notification_reason(
     is_new_offer: bool,
     settings: Settings,
 ) -> NotificationReason | None:
-    if subscription.max_price is not None and current_price <= subscription.max_price:
-        return NotificationReason.PRICE_BELOW_THRESHOLD
-
     if last_sent_event is not None:
         previous_price = last_sent_event.price_amount
+        absolute_delta = abs(previous_price - current_price)
+        if absolute_delta <= settings.min_price_drop_abs:
+            return None
+
         absolute_drop = previous_price - current_price
-        if absolute_drop >= settings.min_price_drop_abs:
+        if absolute_drop > settings.min_price_drop_abs:
             return NotificationReason.PRICE_DROP
         if previous_price > 0:
             percent_drop = (absolute_drop / previous_price) * 100
-            if percent_drop >= settings.min_price_drop_pct:
+            if absolute_drop > settings.min_price_drop_abs and percent_drop >= settings.min_price_drop_pct:
                 return NotificationReason.PRICE_DROP
+
+    if subscription.max_price is not None and current_price <= subscription.max_price:
+        return NotificationReason.PRICE_BELOW_THRESHOLD
 
     if is_new_offer:
         if subscription.max_price is None or current_price <= subscription.max_price:

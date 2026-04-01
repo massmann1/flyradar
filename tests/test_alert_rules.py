@@ -69,6 +69,36 @@ def test_alert_rule_returns_none_when_nothing_changed(subscription_stub, setting
     assert reason is None
 
 
+def test_alert_rule_suppresses_same_offer_noise_within_500_rub(subscription_stub, settings) -> None:
+    subscription_stub.max_price = Decimal("25000")
+    last_sent_event = SimpleNamespace(price_amount=Decimal("12912"))
+
+    reason = choose_notification_reason(
+        subscription=subscription_stub,
+        last_sent_event=last_sent_event,
+        current_price=Decimal("12522"),
+        is_new_offer=False,
+        settings=settings,
+    )
+
+    assert reason is None
+
+
+def test_alert_rule_allows_price_drop_over_500_rub(subscription_stub, settings) -> None:
+    subscription_stub.max_price = Decimal("25000")
+    last_sent_event = SimpleNamespace(price_amount=Decimal("12912"))
+
+    reason = choose_notification_reason(
+        subscription=subscription_stub,
+        last_sent_event=last_sent_event,
+        current_price=Decimal("12411"),
+        is_new_offer=False,
+        settings=settings,
+    )
+
+    assert reason == NotificationReason.PRICE_DROP
+
+
 def test_round_trip_offer_without_return_is_rejected() -> None:
     subscription = SimpleNamespace(
         trip_type=TripType.ROUND_TRIP,
